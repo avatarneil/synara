@@ -38,6 +38,7 @@ import {
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
+import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 import { WsTransport } from "./wsTransport";
 import { emitWsTransportState } from "./wsTransportEvents";
 
@@ -107,7 +108,7 @@ async function requestAuthJson<T>(
   } = {},
 ): Promise<T> {
   const hasBody = options.body !== undefined;
-  const response = await fetch(path, {
+  const response = await fetch(resolveWsHttpUrl(path), {
     method: options.method ?? "GET",
     credentials: "same-origin",
     ...(hasBody

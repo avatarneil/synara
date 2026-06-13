@@ -89,6 +89,7 @@ import {
   SettingsSelectPopup,
 } from "../components/settings/SettingsPanelPrimitives";
 import { ProviderUsageSettingsPanel } from "../components/settings/ProviderUsageSettingsPanel";
+import { RemoteAccessSettingsPanel } from "../components/settings/RemoteAccessSettingsPanel";
 import { SkillsSettingsPanel } from "../components/settings/SkillsSettingsPanel";
 import {
   CHAT_CONTENT_CARD_CLASS_NAME,
@@ -3248,6 +3249,8 @@ function SettingsRouteView() {
         return renderWorktreesPanel();
       case "archived":
         return renderArchivedPanel();
+      case "remote":
+        return <RemoteAccessSettingsPanel />;
       case "models":
         return renderModelsPanel();
       case "providers":

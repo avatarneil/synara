@@ -10,6 +10,7 @@ export const SETTINGS_SECTION_IDS = [
   "behavior",
   "worktrees",
   "archived",
+  "remote",
   "models",
   "providers",
   "skills",
@@ -100,6 +101,14 @@ export const SETTINGS_NAV_ITEMS: readonly SettingsNavItem[] = [
     description: "View and restore archived threads.",
     icon: "archive",
     eyebrow: "Thread management",
+  },
+  {
+    id: "remote",
+    group: "app",
+    label: "Remote access",
+    description: "Reach Synara from your phone or another device on your tailnet or LAN.",
+    icon: "wifi-full",
+    eyebrow: "Phone & LAN",
   },
   {
     id: "models",

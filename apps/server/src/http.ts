@@ -291,12 +291,7 @@ const authEffectRouteLayer = HttpRouter.add(
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/pairing-token") {
-      const session = yield* serverAuth.authenticateHttpRequest(authRequest);
-      if (session.role !== "owner")
-        return HttpServerResponse.jsonUnsafe(
-          { error: "Only owner sessions can create pairing credentials." },
-          { status: 403 },
-        );
+      yield* serverAuth.authenticateOwnerHttpRequest(authRequest);
       const payload =
         Number(request.headers["content-length"] ?? "0") > 0
           ? yield* readEffectJson(request, "Invalid pairing credential payload.").pipe(
@@ -311,16 +306,7 @@ const authEffectRouteLayer = HttpRouter.add(
       return HttpServerResponse.jsonUnsafe(yield* serverAuth.issuePairingCredential(payload));
     }
 
-    const ownerSession = Effect.gen(function* () {
-      const session = yield* serverAuth.authenticateHttpRequest(authRequest);
-      if (session.role !== "owner") {
-        return yield* Effect.fail({
-          message: "Only owner sessions can manage network access.",
-          status: 403 as const,
-        });
-      }
-      return session;
-    });
+    const ownerSession = serverAuth.authenticateOwnerHttpRequest(authRequest);
 
     if (request.method === "GET" && url.pathname === "/api/auth/pairing-links") {
       yield* ownerSession;

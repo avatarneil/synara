@@ -234,6 +234,14 @@ function makeFakeServerAuth(overrides: Partial<ServerAuthShape> = {}): ServerAut
         role: "owner",
         expiresAt,
       }),
+    authenticateOwnerHttpRequest: () =>
+      Effect.succeed({
+        sessionId: "session-id" as never,
+        subject: "owner",
+        method: "browser-session-cookie",
+        role: "owner",
+        expiresAt,
+      }),
     authenticateWebSocketUpgrade: () =>
       Effect.succeed({
         sessionId: "session-id" as never,

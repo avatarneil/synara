@@ -100,6 +100,7 @@ function makeFakeServerAuth(): ServerAuthShape {
     revokeClientSession: () => Effect.succeed(true),
     revokeOtherClientSessions: () => Effect.succeed(1),
     authenticateHttpRequest: () => Effect.succeed(session),
+    authenticateOwnerHttpRequest: () => Effect.succeed(session),
     authenticateWebSocketUpgrade: () => Effect.succeed(session),
     issueWebSocketToken: () => Effect.succeed({ token: "ws-token", expiresAt }),
     issueStartupPairingUrl: () => Effect.succeed("http://127.0.0.1:3773/pair#token=PAIRINGTOKEN"),

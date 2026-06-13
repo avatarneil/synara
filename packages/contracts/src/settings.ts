@@ -1,5 +1,5 @@
 import { Schema } from "effect";
-import { TrimmedString } from "./baseSchemas";
+import { PositiveInt, TrimmedString } from "./baseSchemas";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
 import { ModelSelection, ProviderKind, ThreadEnvironmentMode } from "./orchestration";
 
@@ -84,6 +84,22 @@ export const SkillsServerSettings = Schema.Struct({
 });
 export type SkillsServerSettings = typeof SkillsServerSettings.Type;
 
+export const RemoteAccessBindMode = Schema.Literals([
+  "loopback",
+  "all-interfaces",
+  "tailnet",
+  "custom",
+]);
+export type RemoteAccessBindMode = typeof RemoteAccessBindMode.Type;
+
+export const RemoteAccessServerSettings = Schema.Struct({
+  enabled: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
+  bindMode: RemoteAccessBindMode.pipe(Schema.withDecodingDefault(() => "loopback")),
+  customHost: StringSetting.pipe(Schema.withDecodingDefault(() => "")),
+  port: Schema.NullOr(PositiveInt).pipe(Schema.withDecodingDefault(() => null)),
+});
+export type RemoteAccessServerSettings = typeof RemoteAccessServerSettings.Type;
+
 export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(() => false)),
   defaultThreadEnvMode: ThreadEnvironmentMode.pipe(Schema.withDecodingDefault(() => "local")),
@@ -105,6 +121,7 @@ export const ServerSettings = Schema.Struct({
     pi: PiServerProviderSettings.pipe(Schema.withDecodingDefault(() => ({}))),
   }).pipe(Schema.withDecodingDefault(() => ({}))),
   skills: SkillsServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
+  remoteAccess: RemoteAccessServerSettings.pipe(Schema.withDecodingDefault(() => ({}))),
 });
 export type ServerSettings = typeof ServerSettings.Type;
 
@@ -176,6 +193,14 @@ export const ServerSettingsPatch = Schema.Struct({
   skills: Schema.optionalKey(
     Schema.Struct({
       disabled: Schema.optionalKey(Schema.Array(Schema.String.check(Schema.isMaxLength(256)))),
+    }),
+  ),
+  remoteAccess: Schema.optionalKey(
+    Schema.Struct({
+      enabled: Schema.optionalKey(Schema.Boolean),
+      bindMode: Schema.optionalKey(RemoteAccessBindMode),
+      customHost: Schema.optionalKey(StringSetting),
+      port: Schema.optionalKey(Schema.NullOr(PositiveInt)),
     }),
   ),
 });

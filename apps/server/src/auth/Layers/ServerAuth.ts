@@ -6,8 +6,10 @@ import type {
   AuthSessionState,
   AuthWebSocketTokenResult,
 } from "@t3tools/contracts";
+import { AuthSessionId } from "@t3tools/contracts";
 import { DateTime, Effect, Layer } from "effect";
 
+import { ServerConfig } from "../../config";
 import { AuthControlPlane } from "../Services/AuthControlPlane";
 import {
   BootstrapCredentialError,
@@ -17,6 +19,7 @@ import { ServerAuthPolicy } from "../Services/ServerAuthPolicy";
 import {
   AuthError,
   ServerAuth,
+  type AuthRequest,
   type AuthenticatedSession,
   type ServerAuthShape,
 } from "../Services/ServerAuth";
@@ -32,6 +35,14 @@ type BootstrapExchangeResult = {
 
 const AUTHORIZATION_PREFIX = "Bearer ";
 const WEBSOCKET_TOKEN_QUERY_PARAM = "wsToken";
+const LEGACY_DESKTOP_OWNER_SESSION_ID = AuthSessionId.makeUnsafe("legacy-desktop-owner");
+
+function readLegacyDesktopToken(request: AuthRequest): string | null {
+  const fromQuery = request.url?.searchParams.get("token")?.trim();
+  if (fromQuery) return fromQuery;
+  const fromHeader = request.headers["x-synara-legacy-token"]?.trim();
+  return fromHeader && fromHeader.length > 0 ? fromHeader : null;
+}
 
 export function toBootstrapExchangeAuthError(cause: BootstrapCredentialError): AuthError {
   if (cause.status === 500) {
@@ -79,6 +90,7 @@ export const makeServerAuth = Effect.gen(function* () {
   const bootstrapCredentials = yield* BootstrapCredentialService;
   const authControlPlane = yield* AuthControlPlane;
   const sessions = yield* SessionCredentialService;
+  const serverConfig = yield* ServerConfig;
   const descriptor = yield* policy.getDescriptor();
 
   const authenticateToken = (token: string): Effect.Effect<AuthenticatedSession, AuthError> =>
@@ -113,6 +125,55 @@ export const makeServerAuth = Effect.gen(function* () {
     }
     return authenticateToken(credential);
   };
+
+  const authenticateLegacyDesktopOwner = (
+    request: AuthRequest,
+  ): Effect.Effect<AuthenticatedSession, AuthError> => {
+    if (serverConfig.mode !== "desktop" || !serverConfig.authToken) {
+      return Effect.fail(
+        new AuthError({
+          message: "Authentication required.",
+          status: 401,
+        }),
+      );
+    }
+
+    const legacyToken = readLegacyDesktopToken(request);
+    if (!legacyToken || legacyToken !== serverConfig.authToken) {
+      return Effect.fail(
+        new AuthError({
+          message: "Unauthorized request.",
+          status: 401,
+        }),
+      );
+    }
+
+    return Effect.succeed({
+      sessionId: LEGACY_DESKTOP_OWNER_SESSION_ID,
+      subject: "desktop-bootstrap",
+      method: "browser-session-cookie",
+      role: "owner",
+    } satisfies AuthenticatedSession);
+  };
+
+  const authenticateOwnerHttpRequest: ServerAuthShape["authenticateOwnerHttpRequest"] = (
+    request,
+  ) =>
+    authenticateRequest(request).pipe(
+      Effect.flatMap((session) =>
+        session.role === "owner"
+          ? Effect.succeed(session)
+          : Effect.fail(
+              new AuthError({
+                message: "Only owner sessions can manage network access.",
+                status: 403,
+              }),
+            ),
+      ),
+      Effect.catchTag("AuthError", (error) =>
+        error.status === 401 ? authenticateLegacyDesktopOwner(request) : Effect.fail(error),
+      ),
+    );
 
   const getSessionState: ServerAuthShape["getSessionState"] = (request) =>
     authenticateRequest(request).pipe(
@@ -390,6 +451,7 @@ export const makeServerAuth = Effect.gen(function* () {
     revokeClientSession,
     revokeOtherClientSessions,
     authenticateHttpRequest: authenticateRequest,
+    authenticateOwnerHttpRequest,
     authenticateWebSocketUpgrade,
     issueWebSocketToken,
     issueStartupPairingUrl,

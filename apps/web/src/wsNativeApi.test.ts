@@ -312,6 +312,12 @@ describe("wsNativeApi", () => {
           pi: { enabled: true, binaryPath: "pi", agentDir: "", customModels: [] },
         },
         skills: { disabled: [] },
+        remoteAccess: {
+          enabled: false,
+          bindMode: "loopback",
+          customHost: "",
+          port: null,
+        },
       },
     } as const;
     emitPush(WS_CHANNELS.serverSettingsUpdated, payload);

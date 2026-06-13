@@ -127,6 +127,29 @@ describe("WsTransport", () => {
     transport.dispose();
   });
 
+  it("forwards page URL auth tokens to the websocket connection", () => {
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          protocol: "http:",
+          hostname: "100.64.0.10",
+          port: "3773",
+          href: "http://100.64.0.10:3773/?token=remote-secret",
+          search: "?token=remote-secret",
+          hash: "",
+        },
+        desktopBridge: undefined,
+      },
+    });
+
+    const transport = new WsTransport();
+
+    expect(sockets[0]?.url).toBe("ws://100.64.0.10:3773/ws?token=remote-secret");
+
+    transport.dispose();
+  });
+
   it("notifies state listeners and replays the current state on demand", () => {
     const transport = new WsTransport();
     const listener = vi.fn();

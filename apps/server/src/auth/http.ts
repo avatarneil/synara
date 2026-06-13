@@ -180,17 +180,7 @@ function deriveRequestClientMetadata(req: http.IncomingMessage, label?: string) 
 const authenticateOwnerSession = (input: {
   readonly serverAuth: ServerAuthShape;
   readonly authRequest: AuthRequest;
-}) =>
-  Effect.gen(function* () {
-    const session = yield* input.serverAuth.authenticateHttpRequest(input.authRequest);
-    if (session.role !== "owner") {
-      return yield* new AuthError({
-        message: "Only owner sessions can manage network access.",
-        status: 403,
-      });
-    }
-    return session;
-  });
+}) => input.serverAuth.authenticateOwnerHttpRequest(input.authRequest);
 
 export const serveAuthHttpRoute = Effect.fn(function* (input: AuthHttpRouteOptions) {
   if (!input.url.pathname.startsWith("/api/auth/")) return false;
@@ -266,13 +256,7 @@ export const serveAuthHttpRoute = Effect.fn(function* (input: AuthHttpRouteOptio
     }
 
     if (method === "POST" && input.url.pathname === "/api/auth/pairing-token") {
-      const session = yield* input.serverAuth.authenticateHttpRequest(authRequest);
-      if (session.role !== "owner") {
-        return yield* new AuthError({
-          message: "Only owner sessions can create pairing credentials.",
-          status: 403,
-        });
-      }
+      yield* authenticateOwnerSession({ serverAuth: input.serverAuth, authRequest });
       const payload = hasRequestBody(headers)
         ? yield* readJsonBody(input.req, "Invalid pairing credential payload.").pipe(
             Effect.flatMap((body) =>

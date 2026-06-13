@@ -299,8 +299,20 @@ export interface DesktopWindowState {
   isFullscreen: boolean;
 }
 
+export interface DesktopNetworkRuntimeInfo {
+  readonly httpOrigin: string;
+  readonly wsUrl: string;
+  readonly bindHost: string;
+  readonly port: number;
+  readonly remoteEnabled: boolean;
+  readonly remoteReachable: boolean;
+  readonly reachableUrls: ReadonlyArray<string>;
+}
+
 export interface DesktopBridge {
   getWsUrl: () => string | null;
+  getNetworkRuntimeInfo: () => DesktopNetworkRuntimeInfo | null;
+  restartBackend: () => Promise<void>;
   pickFolder: () => Promise<string | null>;
   saveFile?: (input: {
     defaultFilename: string;

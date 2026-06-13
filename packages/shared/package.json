@@ -72,6 +72,10 @@
       "types": "./src/serverSettings.ts",
       "import": "./src/serverSettings.ts"
     },
+    "./remoteAccess": {
+      "types": "./src/remoteAccess.ts",
+      "import": "./src/remoteAccess.ts"
+    },
     "./terminalThreads": {
       "types": "./src/terminalThreads.ts",
       "import": "./src/terminalThreads.ts"

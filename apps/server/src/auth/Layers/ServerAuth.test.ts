@@ -2,7 +2,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
-import { ServerConfig } from "../../config";
+import { ServerConfig, type ServerConfigShape } from "../../config";
 import { SqlitePersistenceMemory } from "../../persistence/Layers/Sqlite";
 import { AuthControlPlaneLive } from "./AuthControlPlane";
 import { BootstrapCredentialServiceLive } from "./BootstrapCredentialService";
@@ -34,6 +34,32 @@ const testLayer = ServerAuthLive.pipe(
   ),
   Layer.provide(NodeServices.layer),
 );
+
+const makeTestLayer = (overrides: Partial<ServerConfigShape>) =>
+  ServerAuthLive.pipe(
+    Layer.provide(ServerAuthPolicyLive),
+    Layer.provide(BootstrapCredentialServiceLive),
+    Layer.provide(sessionCredentialLayer),
+    Layer.provide(authControlPlaneLayer),
+    Layer.provide(SqlitePersistenceMemory),
+    Layer.provide(ServerSecretStoreLive),
+    Layer.provide(
+      Layer.effect(
+        ServerConfig,
+        Effect.gen(function* () {
+          const config = yield* ServerConfig;
+          return { ...config, ...overrides } satisfies ServerConfigShape;
+        }),
+      ).pipe(
+        Layer.provide(
+          ServerConfig.layerTest(process.cwd(), {
+            prefix: "dpcode-auth-server-test-",
+          }),
+        ),
+      ),
+    ),
+    Layer.provide(NodeServices.layer),
+  );
 
 const requestMetadata = {
   deviceType: "desktop" as const,
@@ -199,6 +225,30 @@ describe("ServerAuthLive", () => {
         expect(upgraded.sessionId).toBe(session.sessionId);
         expect(upgraded.role).toBe("owner");
       }),
+    );
+  });
+
+  it("accepts legacy desktop startup tokens for owner HTTP routes", async () => {
+    await Effect.runPromise(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        const owner = yield* serverAuth.authenticateOwnerHttpRequest({
+          headers: {},
+          cookies: {},
+          url: new URL("http://127.0.0.1:53000/api/auth/pairing-token?token=desktop-secret"),
+        });
+
+        expect(owner.role).toBe("owner");
+        expect(owner.subject).toBe("desktop-bootstrap");
+      }).pipe(
+        Effect.provide(
+          makeTestLayer({
+            mode: "desktop",
+            authToken: "desktop-secret",
+          }),
+        ),
+        Effect.scoped,
+      ),
     );
   });
 });

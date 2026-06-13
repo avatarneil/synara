@@ -3,7 +3,7 @@
 // Layer: Web utility tests
 // Exports: Vitest suites for providerUpdates.ts
 
-import type { ProviderKind, ServerProviderStatus, ServerSettings } from "@t3tools/contracts";
+import { DEFAULT_SERVER_SETTINGS, type ProviderKind, type ServerProviderStatus, type ServerSettings } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -67,6 +67,7 @@ function serverSettings(overrides: Partial<ServerSettings["providers"]> = {}): S
       ...overrides,
     },
     skills: { disabled: [] },
+    remoteAccess: DEFAULT_SERVER_SETTINGS.remoteAccess,
   };
 }
 

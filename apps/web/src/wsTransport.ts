@@ -49,8 +49,35 @@ function resolveRpcUrl(rawUrl: string): string {
   return url.toString();
 }
 
+function readPageLegacyAuthToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const pageUrl = new URL(window.location.href);
+    const fromSearch = pageUrl.searchParams.get("token")?.trim();
+    if (fromSearch) return fromSearch;
+    const fromHash = new URLSearchParams(pageUrl.hash.slice(1)).get("token")?.trim();
+    return fromHash && fromHash.length > 0 ? fromHash : null;
+  } catch {
+    return null;
+  }
+}
+
+function appendPageAuthToken(rawUrl: string): string {
+  const token = readPageLegacyAuthToken();
+  if (!token) return rawUrl;
+  try {
+    const url = new URL(rawUrl);
+    if (!url.searchParams.has("token")) {
+      url.searchParams.set("token", token);
+    }
+    return url.toString();
+  } catch {
+    return rawUrl;
+  }
+}
+
 function makeSocketUrl(explicitUrl: string | null): string {
-  if (explicitUrl) return resolveRpcUrl(explicitUrl);
+  if (explicitUrl) return appendPageAuthToken(resolveRpcUrl(explicitUrl));
   const bridgeUrl = window.desktopBridge?.getWsUrl();
   const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
   const rawUrl =
@@ -59,7 +86,7 @@ function makeSocketUrl(explicitUrl: string | null): string {
       : envUrl && envUrl.length > 0
         ? envUrl
         : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
-  return resolveRpcUrl(rawUrl);
+  return appendPageAuthToken(resolveRpcUrl(rawUrl));
 }
 
 function makeProtocolLayer(url: string) {

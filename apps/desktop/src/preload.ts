@@ -6,6 +6,10 @@ import {
   normalizeDesktopWsUrl,
   resolveDesktopWsUrlFromEnv,
 } from "./desktopWsBridge";
+import {
+  DESKTOP_RESTART_BACKEND_CHANNEL,
+  DESKTOP_RUNTIME_INFO_CHANNEL,
+} from "./desktopRuntimeBridge";
 import { SERVER_TRANSCRIBE_VOICE_CHANNEL } from "./voiceTranscription";
 
 const PICK_FOLDER_CHANNEL = "desktop:pick-folder";
@@ -42,6 +46,14 @@ function getDesktopWsUrl(): string | null {
 
 contextBridge.exposeInMainWorld("desktopBridge", {
   getWsUrl: getDesktopWsUrl,
+  getNetworkRuntimeInfo: () => {
+    try {
+      return ipcRenderer.sendSync(DESKTOP_RUNTIME_INFO_CHANNEL);
+    } catch {
+      return null;
+    }
+  },
+  restartBackend: () => ipcRenderer.invoke(DESKTOP_RESTART_BACKEND_CHANNEL),
   pickFolder: () => ipcRenderer.invoke(PICK_FOLDER_CHANNEL),
   saveFile: (input) => ipcRenderer.invoke(SAVE_FILE_CHANNEL, input),
   confirm: (message) => ipcRenderer.invoke(CONFIRM_CHANNEL, message),

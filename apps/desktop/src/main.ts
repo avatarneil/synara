@@ -108,6 +108,21 @@ import {
   resolveDesktopWsUrlFromEnv,
 } from "./desktopWsBridge";
 import {
+  buildDesktopNetworkRuntimeInfo,
+  DESKTOP_RESTART_BACKEND_CHANNEL,
+  DESKTOP_RUNTIME_INFO_CHANNEL,
+} from "./desktopRuntimeBridge";
+import { listLanIpv4Addresses, resolveTailnetIpv4 } from "./networkAddresses";
+import { readRemoteAccessSettingsFromDisk } from "./remoteAccessSettings";
+import {
+  buildReachableHttpUrls,
+  formatHostForUrl,
+  isLoopbackHost,
+  isRemoteAccessReachable,
+  isWildcardHost,
+  resolveRemoteAccessBindHost,
+} from "@t3tools/shared/remoteAccess";
+import {
   resolveDesktopAppDataBase,
   resolveDesktopUserDataPath,
   resolveLegacyDesktopUserDataPaths,
@@ -195,6 +210,10 @@ let mainWindow: BrowserWindow | null = null;
 let backendProcess: ChildProcess.ChildProcess | null = null;
 let backendPort = 0;
 let backendAuthToken = "";
+let backendBindHost = "127.0.0.1";
+let backendRemoteEnabled = false;
+let backendRemoteReachable = false;
+let backendReachableUrls: ReadonlyArray<string> = [];
 let backendHttpUrl = "";
 let backendWsUrl = "";
 let backendReadinessAbortController: AbortController | null = null;
@@ -410,17 +429,79 @@ function cancelBackendReadinessWait(): void {
 }
 
 async function reserveBackendEndpoint(reason: string): Promise<void> {
-  backendPort = await Effect.service(NetService).pipe(
-    Effect.flatMap((net) => net.reserveLoopbackPort()),
+  const remoteAccess = readRemoteAccessSettingsFromDisk(STATE_DIR);
+  const tailnetIpv4 = remoteAccess.enabled ? resolveTailnetIpv4() : null;
+  backendBindHost = resolveRemoteAccessBindHost(remoteAccess, { tailnetIpv4 });
+  backendRemoteEnabled = remoteAccess.enabled;
+  backendRemoteReachable = isRemoteAccessReachable(remoteAccess, backendBindHost);
+
+  const net = await Effect.service(NetService).pipe(
     Effect.provide(NetService.layer),
     Effect.runPromise,
   );
-  backendHttpUrl = `http://127.0.0.1:${backendPort}`;
-  backendWsUrl = `ws://127.0.0.1:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
+
+  if (remoteAccess.port !== null) {
+    const canBind = await Effect.runPromise(net.canListenOnHost(remoteAccess.port, backendBindHost));
+    if (!canBind) {
+      throw new Error(`Port ${remoteAccess.port} is unavailable on ${backendBindHost}`);
+    }
+    backendPort = remoteAccess.port;
+  } else if (backendRemoteReachable || !isLoopbackHost(backendBindHost)) {
+    backendPort = await Effect.runPromise(net.reserveLoopbackPort(backendBindHost));
+  } else {
+    backendPort = await Effect.service(NetService).pipe(
+      Effect.flatMap((service) => service.reserveLoopbackPort()),
+      Effect.provide(NetService.layer),
+      Effect.runPromise,
+    );
+  }
+
+  const localHostname =
+    isLoopbackHost(backendBindHost) || isWildcardHost(backendBindHost)
+      ? "127.0.0.1"
+      : formatHostForUrl(backendBindHost);
+  backendHttpUrl = `http://${localHostname}:${backendPort}`;
+  backendWsUrl = `ws://${localHostname}:${backendPort}/?token=${encodeURIComponent(backendAuthToken)}`;
+  backendReachableUrls = buildReachableHttpUrls({
+    bindHost: backendBindHost,
+    port: backendPort,
+    tailnetIpv4,
+    lanIpv4Addresses: listLanIpv4Addresses(),
+  });
   process.env.SYNARA_DESKTOP_WS_URL = backendWsUrl;
   process.env.DPCODE_DESKTOP_WS_URL = backendWsUrl;
   process.env.T3CODE_DESKTOP_WS_URL = backendWsUrl;
-  writeDesktopLogHeader(`${reason} resolved backend endpoint port=${backendPort}`);
+  writeDesktopLogHeader(
+    `${reason} resolved backend endpoint host=${backendBindHost} port=${backendPort} remote=${backendRemoteReachable}`,
+  );
+}
+
+function currentDesktopNetworkRuntimeInfo() {
+  return buildDesktopNetworkRuntimeInfo({
+    httpOrigin: backendHttpUrl,
+    wsUrl: backendWsUrl,
+    bindHost: backendBindHost,
+    port: backendPort,
+    remoteEnabled: backendRemoteEnabled,
+    remoteReachable: backendRemoteReachable,
+    reachableUrls: backendReachableUrls,
+  });
+}
+
+async function restartBackendForSettingsChange(): Promise<void> {
+  if (isQuitting) return;
+
+  cancelBackendReadinessWait();
+  await stopBackendAndWaitForExit();
+  restartAttempt = 0;
+  await reserveBackendEndpoint("remote settings restart");
+  startBackend();
+  ensureInitialBackendWindowOpen(backendHttpUrl);
+
+  for (const window of BrowserWindow.getAllWindows()) {
+    if (window.isDestroyed()) continue;
+    window.webContents.reload();
+  }
 }
 
 async function waitForBackendWindowReady(baseUrl: string): Promise<"listening" | "http"> {
@@ -1858,6 +1939,7 @@ function backendEnv(): NodeJS.ProcessEnv {
     DPCODE_MODE: "desktop",
     DPCODE_NO_BROWSER: "1",
     DPCODE_PORT: String(backendPort),
+    DPCODE_HOST: backendBindHost,
     DPCODE_HOME: BASE_DIR,
     DPCODE_AUTH_TOKEN: backendAuthToken,
     [DPCODE_BROWSER_USE_PIPE_ENV]: SYNARA_BROWSER_USE_PIPE_PATH,
@@ -1865,6 +1947,7 @@ function backendEnv(): NodeJS.ProcessEnv {
     T3CODE_MODE: "desktop",
     T3CODE_NO_BROWSER: "1",
     T3CODE_PORT: String(backendPort),
+    T3CODE_HOST: backendBindHost,
     T3CODE_HOME: BASE_DIR,
     T3CODE_AUTH_TOKEN: backendAuthToken,
     SYNARA_HOME: BASE_DIR,
@@ -2117,6 +2200,16 @@ function registerIpcHandlers(): void {
     // live URL instead of trusting build-time or inherited renderer env.
     event.returnValue =
       normalizeDesktopWsUrl(backendWsUrl) ?? resolveDesktopWsUrlFromEnv(process.env);
+  });
+
+  ipcMain.removeAllListeners(DESKTOP_RUNTIME_INFO_CHANNEL);
+  ipcMain.on(DESKTOP_RUNTIME_INFO_CHANNEL, (event: IpcMainEvent) => {
+    event.returnValue = currentDesktopNetworkRuntimeInfo();
+  });
+
+  ipcMain.removeHandler(DESKTOP_RESTART_BACKEND_CHANNEL);
+  ipcMain.handle(DESKTOP_RESTART_BACKEND_CHANNEL, async () => {
+    await restartBackendForSettingsChange();
   });
 
   ipcMain.removeAllListeners(ZOOM_FACTOR_CHANNEL);
