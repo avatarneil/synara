@@ -7,6 +7,11 @@ import type {
   AuthWebSocketTokenResult,
 } from "@t3tools/contracts";
 import { AuthSessionId } from "@t3tools/contracts";
+import {
+  buildSecurePairingUrl,
+  createSecurePairingPayload,
+  decodeIdentityPublicKey,
+} from "@t3tools/shared/secureRemote";
 import { DateTime, Effect, Layer } from "effect";
 
 import { ServerConfig } from "../../config";
@@ -27,6 +32,7 @@ import {
   SessionCredentialError,
   SessionCredentialService,
 } from "../Services/SessionCredentialService";
+import { getSecureRemotePairingServerIdentity } from "../secureRemoteIdentity";
 
 type BootstrapExchangeResult = {
   readonly response: AuthBootstrapResult;
@@ -74,6 +80,7 @@ function toAuthenticatedSession(session: {
   readonly subject: string;
   readonly method: AuthenticatedSession["method"];
   readonly role: AuthenticatedSession["role"];
+  readonly client: AuthenticatedSession["client"];
   readonly expiresAt?: DateTime.DateTime;
 }): AuthenticatedSession {
   return {
@@ -81,6 +88,7 @@ function toAuthenticatedSession(session: {
     subject: session.subject,
     method: session.method,
     role: session.role,
+    client: session.client,
     ...(session.expiresAt ? { expiresAt: session.expiresAt } : {}),
   };
 }
@@ -92,6 +100,7 @@ export const makeServerAuth = Effect.gen(function* () {
   const sessions = yield* SessionCredentialService;
   const serverConfig = yield* ServerConfig;
   const descriptor = yield* policy.getDescriptor();
+  const securePairingServerIdentity = yield* getSecureRemotePairingServerIdentity;
 
   const authenticateToken = (token: string): Effect.Effect<AuthenticatedSession, AuthError> =>
     sessions.verify(token).pipe(
@@ -153,6 +162,7 @@ export const makeServerAuth = Effect.gen(function* () {
       subject: "desktop-bootstrap",
       method: "browser-session-cookie",
       role: "owner",
+      client: { deviceType: "desktop" },
     } satisfies AuthenticatedSession);
   };
 
@@ -277,6 +287,61 @@ export const makeServerAuth = Effect.gen(function* () {
         ),
       );
 
+  const exchangeSecureBootstrapCredential: ServerAuthShape["exchangeSecureBootstrapCredential"] = (
+    input,
+    requestMetadata,
+  ) =>
+    Effect.try({
+      try: () => decodeIdentityPublicKey(input.clientIdentityPublicKey),
+      catch: (cause) =>
+        new AuthError({
+          message: "Invalid client identity public key.",
+          status: 400,
+          cause,
+        }),
+    }).pipe(
+      Effect.flatMap(() =>
+        bootstrapCredentials.consume(input.credential).pipe(
+          Effect.mapError(toBootstrapExchangeAuthError),
+          Effect.flatMap((grant) =>
+            sessions
+              .issue({
+                method: "browser-session-cookie",
+                subject: grant.subject,
+                role: grant.role,
+                client: {
+                  ...requestMetadata,
+                  ...(grant.label ? { label: grant.label } : {}),
+                  identityPublicKey: input.clientIdentityPublicKey,
+                },
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new AuthError({
+                      message: "Failed to issue authenticated session.",
+                      status: 500,
+                      cause,
+                    }),
+                ),
+              ),
+          ),
+          Effect.map(
+            (session) =>
+              ({
+                response: {
+                  authenticated: true,
+                  role: session.role,
+                  sessionMethod: session.method,
+                  expiresAt: DateTime.toUtc(session.expiresAt),
+                } satisfies AuthBootstrapResult,
+                sessionToken: session.token,
+              }) satisfies BootstrapExchangeResult,
+          ),
+        ),
+      ),
+    );
+
   const issuePairingCredential: ServerAuthShape["issuePairingCredential"] = (input) =>
     authControlPlane
       .createPairingLink({
@@ -300,6 +365,7 @@ export const makeServerAuth = Effect.gen(function* () {
               credential: issued.credential,
               ...(issued.label ? { label: issued.label } : {}),
               expiresAt: DateTime.toUtc(issued.expiresAt),
+              securePairing: securePairingServerIdentity,
             }) satisfies AuthPairingCredentialResult,
         ),
       );
@@ -433,6 +499,17 @@ export const makeServerAuth = Effect.gen(function* () {
   const issueStartupPairingUrl: ServerAuthShape["issueStartupPairingUrl"] = (baseUrl) =>
     issuePairingCredential({ role: "owner" }).pipe(
       Effect.map((issued) => {
+        if (issued.securePairing) {
+          return buildSecurePairingUrl(
+            new URL(baseUrl).origin,
+            createSecurePairingPayload({
+              origin: new URL(baseUrl).origin,
+              credential: issued.credential,
+              expiresAt: DateTime.formatIso(issued.expiresAt),
+              serverIdentity: issued.securePairing,
+            }),
+          );
+        }
         const url = new URL(baseUrl);
         url.pathname = "/pair";
         url.searchParams.delete("token");
@@ -446,6 +523,7 @@ export const makeServerAuth = Effect.gen(function* () {
     getSessionState,
     exchangeBootstrapCredential,
     exchangeBootstrapCredentialForBearerSession,
+    exchangeSecureBootstrapCredential,
     issuePairingCredential,
     listPairingLinks,
     revokePairingLink,

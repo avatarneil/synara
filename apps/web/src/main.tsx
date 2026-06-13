@@ -19,6 +19,24 @@ if (isElectron) {
   document.documentElement.dataset.runtime = "electron";
 }
 
+function canRegisterServiceWorker(): boolean {
+  if (isElectron || !("serviceWorker" in navigator)) {
+    return false;
+  }
+
+  if (window.isSecureContext) {
+    return true;
+  }
+
+  return ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+if (canRegisterServiceWorker()) {
+  window.addEventListener("load", () => {
+    void navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch(() => undefined);
+  });
+}
+
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
     <RouterProvider router={router} />

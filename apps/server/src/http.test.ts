@@ -219,6 +219,16 @@ function makeFakeServerAuth(overrides: Partial<ServerAuthShape> = {}): ServerAut
         expiresAt,
         sessionToken: "bearer-session-token",
       }),
+    exchangeSecureBootstrapCredential: () =>
+      Effect.succeed({
+        response: {
+          authenticated: true,
+          role: "client",
+          sessionMethod: "browser-session-cookie",
+          expiresAt,
+        },
+        sessionToken: "session-token",
+      }),
     issuePairingCredential: () =>
       Effect.succeed({ id: "pairing-id", credential: "PAIRINGTOKEN", expiresAt }),
     listPairingLinks: () => Effect.succeed([]),
@@ -232,6 +242,7 @@ function makeFakeServerAuth(overrides: Partial<ServerAuthShape> = {}): ServerAut
         subject: "owner",
         method: "browser-session-cookie",
         role: "owner",
+        client: { deviceType: "desktop" },
         expiresAt,
       }),
     authenticateOwnerHttpRequest: () =>
@@ -240,6 +251,7 @@ function makeFakeServerAuth(overrides: Partial<ServerAuthShape> = {}): ServerAut
         subject: "owner",
         method: "browser-session-cookie",
         role: "owner",
+        client: { deviceType: "desktop" },
         expiresAt,
       }),
     authenticateWebSocketUpgrade: () =>
@@ -248,6 +260,7 @@ function makeFakeServerAuth(overrides: Partial<ServerAuthShape> = {}): ServerAut
         subject: "owner",
         method: "browser-session-cookie",
         role: "owner",
+        client: { deviceType: "desktop" },
         expiresAt,
       }),
     issueWebSocketToken: () => Effect.succeed({ token: "ws-token", expiresAt }),
@@ -395,6 +408,30 @@ describe("createHttpRequestHandler", () => {
           policy: "loopback-browser",
         },
       });
+    });
+  });
+
+  it("answers auth preflight requests from the dev renderer origin", async () => {
+    const config = await makeConfig({ devUrl: new URL("http://localhost:5173/") });
+    const handler = await makeHandler(config, {
+      serverAuth: makeFakeServerAuth(),
+      cookieName: "t3_session",
+    });
+
+    await withServer(handler, async (origin) => {
+      const response = await fetch(`${origin}/api/auth/pairing-token?token=desktop-secret`, {
+        method: "OPTIONS",
+        headers: {
+          Origin: "http://localhost:5173",
+          "Access-Control-Request-Method": "POST",
+          "Access-Control-Request-Headers": "content-type",
+        },
+      });
+
+      expect(response.status).toBe(204);
+      expect(response.headers.get("access-control-allow-origin")).toBe("http://localhost:5173");
+      expect(response.headers.get("access-control-allow-methods")).toContain("POST");
+      expect(response.headers.get("access-control-allow-headers")).toBe("content-type");
     });
   });
 

@@ -36,6 +36,7 @@ export default Effect.gen(function* () {
       client_device_type TEXT NOT NULL DEFAULT 'unknown',
       client_os TEXT,
       client_browser TEXT,
+      client_identity_public_key TEXT,
       issued_at TEXT NOT NULL,
       expires_at TEXT NOT NULL,
       last_connected_at TEXT,

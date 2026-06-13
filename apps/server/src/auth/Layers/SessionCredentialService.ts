@@ -72,6 +72,7 @@ function toClientMetadata(record: {
   readonly deviceType: AuthClientMetadata["deviceType"];
   readonly os: string | null;
   readonly browser: string | null;
+  readonly identityPublicKey: string | null;
 }): AuthClientMetadata {
   return {
     ...(record.label ? { label: record.label } : {}),
@@ -80,6 +81,7 @@ function toClientMetadata(record: {
     deviceType: record.deviceType,
     ...(record.os ? { os: record.os } : {}),
     ...(record.browser ? { browser: record.browser } : {}),
+    ...(record.identityPublicKey ? { identityPublicKey: record.identityPublicKey } : {}),
   };
 }
 
@@ -204,6 +206,7 @@ export const makeSessionCredentialService = Effect.gen(function* () {
           deviceType: client.deviceType,
           os: client.os ?? null,
           browser: client.browser ?? null,
+          identityPublicKey: client.identityPublicKey ?? null,
         },
         issuedAt,
         expiresAt,

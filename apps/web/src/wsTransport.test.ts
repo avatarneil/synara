@@ -5,7 +5,12 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WS_CHANNELS } from "@t3tools/contracts";
+import {
+  createSecurePairingPayload,
+  generateSecureRemoteIdentity,
+} from "@t3tools/shared/secureRemote";
 
+import { saveTrustedSecureRemoteServer } from "./lib/secureRemoteState";
 import { shouldKeepServerLifecycleStream, WsTransport } from "./wsTransport";
 
 type WsEventType = "open" | "message" | "close" | "error";
@@ -58,6 +63,20 @@ class MockWebSocket {
 const originalWebSocket = globalThis.WebSocket;
 const originalFetch = globalThis.fetch;
 
+function createMemoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() {
+      return values.size;
+    },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => values.delete(key),
+    setItem: (key, value) => values.set(key, value),
+  };
+}
+
 async function waitForSocket(): Promise<MockWebSocket> {
   for (let attempt = 0; attempt < 20; attempt += 1) {
     const socket = sockets.at(-1);
@@ -92,6 +111,7 @@ beforeEach(() => {
         search: "",
         hash: "",
       },
+      localStorage: createMemoryStorage(),
       desktopBridge: undefined,
     },
   });
@@ -135,6 +155,7 @@ describe("WsTransport", () => {
       configurable: true,
       value: {
         location: { protocol: "http:", hostname: "localhost", port: "3020" },
+        localStorage: createMemoryStorage(),
         desktopBridge: { getWsUrl },
       },
     });
@@ -170,6 +191,7 @@ describe("WsTransport", () => {
           search: "?token=remote-secret",
           hash: "",
         },
+        localStorage: createMemoryStorage(),
         desktopBridge: undefined,
       },
     });
@@ -200,6 +222,7 @@ describe("WsTransport", () => {
           search: "",
           hash: "",
         },
+        localStorage: createMemoryStorage(),
         desktopBridge: undefined,
       },
     });
@@ -212,6 +235,50 @@ describe("WsTransport", () => {
       expect.objectContaining({ method: "POST", credentials: "include" }),
     );
     expect(socket.url).toBe("ws://100.64.0.10:3773/ws?wsToken=paired-ws-token");
+
+    transport.dispose();
+  });
+
+  it("uses encrypted websocket transport for trusted paired servers", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "paired-ws-token" }),
+    } as Response);
+
+    const serverIdentity = generateSecureRemoteIdentity();
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          protocol: "http:",
+          hostname: "100.64.0.10",
+          port: "3773",
+          origin: "http://100.64.0.10:3773",
+          href: "http://100.64.0.10:3773/",
+          search: "",
+          hash: "",
+        },
+        localStorage: createMemoryStorage(),
+        desktopBridge: undefined,
+      },
+    });
+    saveTrustedSecureRemoteServer(
+      createSecurePairingPayload({
+        origin: "http://100.64.0.10:3773",
+        credential: "PAIRINGTOKEN",
+        expiresAt: new Date(Date.now() + 60_000).toISOString(),
+        serverIdentity: {
+          protocol: "synara-remote-e2ee-v1",
+          serverDeviceId: serverIdentity.deviceId,
+          serverIdentityPublicKey: serverIdentity.identityPublicKey,
+        },
+      }),
+    );
+
+    const transport = new WsTransport();
+    const socket = await waitForSocket();
+
+    expect(socket.url).toBe("ws://100.64.0.10:3773/ws?wsToken=paired-ws-token&secure=1");
 
     transport.dispose();
   });

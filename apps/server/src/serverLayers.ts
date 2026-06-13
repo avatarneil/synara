@@ -77,6 +77,7 @@ export function makeServerRuntimeServicesLayer() {
   );
   const serverAuthLayer = ServerAuthLive.pipe(
     Layer.provide(ServerAuthPolicyLive),
+    Layer.provide(ServerSecretStoreLive),
     Layer.provide(BootstrapCredentialServiceLive),
     Layer.provide(sessionCredentialLayer),
     Layer.provide(authControlPlaneLayer),

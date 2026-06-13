@@ -58,13 +58,28 @@ export const AuthWebSocketTokenResult = Schema.Struct({
 });
 export type AuthWebSocketTokenResult = typeof AuthWebSocketTokenResult.Type;
 
+export const AuthSecurePairingServerIdentity = Schema.Struct({
+  protocol: Schema.Literal("synara-remote-e2ee-v1"),
+  serverDeviceId: TrimmedNonEmptyString,
+  serverIdentityPublicKey: TrimmedNonEmptyString,
+});
+export type AuthSecurePairingServerIdentity = typeof AuthSecurePairingServerIdentity.Type;
+
 export const AuthPairingCredentialResult = Schema.Struct({
   id: TrimmedNonEmptyString,
   credential: TrimmedNonEmptyString,
   label: Schema.optionalKey(TrimmedNonEmptyString),
   expiresAt: Schema.DateTimeUtc,
+  securePairing: Schema.optionalKey(AuthSecurePairingServerIdentity),
 });
 export type AuthPairingCredentialResult = typeof AuthPairingCredentialResult.Type;
+
+export const AuthSecureBootstrapInput = Schema.Struct({
+  credential: TrimmedNonEmptyString,
+  clientDeviceId: TrimmedNonEmptyString,
+  clientIdentityPublicKey: TrimmedNonEmptyString,
+});
+export type AuthSecureBootstrapInput = typeof AuthSecureBootstrapInput.Type;
 
 export const AuthPairingLink = Schema.Struct({
   id: TrimmedNonEmptyString,
@@ -93,6 +108,7 @@ export const AuthClientMetadata = Schema.Struct({
   deviceType: AuthClientMetadataDeviceType,
   os: Schema.optionalKey(TrimmedNonEmptyString),
   browser: Schema.optionalKey(TrimmedNonEmptyString),
+  identityPublicKey: Schema.optionalKey(TrimmedNonEmptyString),
 });
 export type AuthClientMetadata = typeof AuthClientMetadata.Type;
 

@@ -9,8 +9,10 @@ import type {
   ServerSettings,
 } from "@t3tools/contracts";
 import { buildPairingUrl } from "@t3tools/shared/remoteAccess";
+import { buildSecurePairingUrl, createSecurePairingPayload } from "@t3tools/shared/secureRemote";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { useMemo, useState } from "react";
+import * as QRCode from "qrcode";
+import { useEffect, useMemo, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { SelectItem } from "~/components/ui/select";
@@ -46,6 +48,12 @@ function pickPairingOrigin(reachableUrls: ReadonlyArray<string>): string {
   return reachableUrls[0] ?? "http://127.0.0.1:3773";
 }
 
+function stringifyJsonDate(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (value instanceof Date) return value.toISOString();
+  return String(value);
+}
+
 async function applyRemoteAccessPatch(
   queryClient: ReturnType<typeof useQueryClient>,
   patch: Partial<RemoteAccessServerSettings>,
@@ -79,6 +87,57 @@ function formatClientLabel(client: AuthClientSession): string {
     client.client.browser,
   ].filter((part) => typeof part === "string" && part.trim().length > 0);
   return parts.length > 0 ? parts.join(" · ") : client.subject;
+}
+
+function PairingQrCode({ value }: { value: string }) {
+  const [qrDataUrl, setQrDataUrl] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    let disposed = false;
+    setQrDataUrl(null);
+    setErrorMessage(null);
+
+    void QRCode.toString(value, {
+      type: "svg",
+      errorCorrectionLevel: "M",
+      margin: 2,
+      width: 224,
+      color: {
+        dark: "#0a0a0a",
+        light: "#ffffff",
+      },
+    })
+      .then((svg) => {
+        if (disposed) return;
+        setQrDataUrl(`data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`);
+      })
+      .catch((error) => {
+        if (disposed) return;
+        setErrorMessage(error instanceof Error ? error.message : "Could not render QR code.");
+      });
+
+    return () => {
+      disposed = true;
+    };
+  }, [value]);
+
+  return (
+    <div className="flex justify-center rounded-lg border border-border/70 bg-white p-3">
+      {qrDataUrl ? (
+        <img
+          alt="Pairing QR code"
+          className="size-56 max-w-full"
+          draggable={false}
+          src={qrDataUrl}
+        />
+      ) : (
+        <div className="flex size-56 max-w-full items-center justify-center text-center text-xs text-zinc-500">
+          {errorMessage ?? "Rendering QR code..."}
+        </div>
+      )}
+    </div>
+  );
 }
 
 export function RemoteAccessSettingsPanel() {
@@ -117,6 +176,17 @@ export function RemoteAccessSettingsPanel() {
     mutationFn: async () => {
       const issued = await ensureNativeApi().server.createAuthPairingToken({ label: "Phone" });
       const origin = pickPairingOrigin(reachableUrls);
+      if (issued.securePairing) {
+        return buildSecurePairingUrl(
+          origin,
+          createSecurePairingPayload({
+            origin,
+            credential: issued.credential,
+            expiresAt: stringifyJsonDate(issued.expiresAt),
+            serverIdentity: issued.securePairing,
+          }),
+        );
+      }
       return buildPairingUrl(origin, issued.credential);
     },
     onSuccess: (url) => {
@@ -317,8 +387,8 @@ export function RemoteAccessSettingsPanel() {
       {remoteActive ? (
         <SettingsSection title="Pair a device">
           <SettingsRow
-            title="Pairing link"
-            description="Generate a one-time link to sign in from a phone browser. Links expire after a few minutes."
+            title="Pairing QR"
+            description="Generate a one-time QR code to sign in from a phone browser. Pairing credentials expire after a few minutes."
             control={
               <Button
                 size="xs"
@@ -326,17 +396,22 @@ export function RemoteAccessSettingsPanel() {
                 disabled={createPairingLink.isPending}
                 onClick={() => createPairingLink.mutate()}
               >
-                {createPairingLink.isPending ? "Creating..." : "Create link"}
+                {createPairingLink.isPending ? "Creating..." : "Create QR"}
               </Button>
             }
           >
             {pairingUrl ? (
-              <div className="mt-3 space-y-2 rounded-md border border-border/70 bg-background/60 px-3 py-2">
+              <div className="mt-3 space-y-3 rounded-md border border-border/70 bg-background/60 px-3 py-3">
+                <PairingQrCode value={pairingUrl} />
                 <code className="block break-all font-mono text-[11px] text-foreground">
                   {pairingUrl}
                 </code>
                 <div className="flex flex-wrap gap-2">
-                  <Button size="xs" variant="outline" onClick={() => void copyText(pairingUrl, "Pairing link")}>
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() => void copyText(pairingUrl, "Pairing link")}
+                  >
                     <CopyIcon className="size-3.5" />
                     Copy link
                   </Button>

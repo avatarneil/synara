@@ -18,13 +18,15 @@ import {
   type ServerDiagnosticsResult,
   type ServerLifecycleStreamEvent,
 } from "@t3tools/contracts";
+import { SECURE_REMOTE_WS_QUERY_PARAM } from "@t3tools/shared/secureRemote";
 import { clamp } from "effect/Number";
 import { Effect, FileSystem, Layer, Option, Path, Queue, Schema, Stream } from "effect";
 import { HttpRouter, HttpServerRequest } from "effect/unstable/http";
 import { RpcSerialization, RpcServer } from "effect/unstable/rpc";
 
 import { authErrorResponse, makeEffectAuthRequest } from "./auth/http";
-import { ServerAuth } from "./auth/Services/ServerAuth";
+import { getSecureRemoteIdentity } from "./auth/secureRemoteIdentity";
+import { AuthError, ServerAuth } from "./auth/Services/ServerAuth";
 import { SessionCredentialService } from "./auth/Services/SessionCredentialService";
 import { CheckpointDiffQuery } from "./checkpointing/Services/CheckpointDiffQuery";
 import { ServerConfig } from "./config";
@@ -51,6 +53,7 @@ import { ServerEnvironment } from "./environment/Services/ServerEnvironment";
 import { ServerLifecycleEvents } from "./serverLifecycleEvents";
 import { ServerRuntimeStartup } from "./serverRuntimeStartup";
 import { ServerSettingsService } from "./serverSettings";
+import { makeSecureRemoteServerSocket } from "./secureRemoteSocket";
 import { TerminalManager } from "./terminal/Services/Manager";
 import { TerminalThreadTitleTracker } from "./terminal/terminalThreadTitleTracker";
 import { WorkspaceEntries } from "./workspace/Services/WorkspaceEntries";
@@ -1145,10 +1148,51 @@ export const websocketRpcRouteLayer = Layer.effectDiscard(
         const sessions = yield* SessionCredentialService;
         const url = HttpServerRequest.toURL(request);
         const legacyToken = url ? url.searchParams.get("token") : null;
+        const secureRequested = url?.searchParams.get(SECURE_REMOTE_WS_QUERY_PARAM) === "1";
         const authenticatedSession =
-          !config.authToken || legacyToken === config.authToken
+          !secureRequested && (!config.authToken || legacyToken === config.authToken)
             ? null
             : yield* serverAuth.authenticateWebSocketUpgrade(makeEffectAuthRequest(request));
+
+        if (secureRequested) {
+          if (!authenticatedSession) {
+            return authErrorResponse(
+              new AuthError({
+                message: "Authentication required.",
+                status: 401,
+              }),
+            );
+          }
+          const expectedClientIdentityPublicKey =
+            authenticatedSession.client.identityPublicKey?.trim();
+          if (!expectedClientIdentityPublicKey) {
+            return authErrorResponse(
+              new AuthError({
+                message: "Secure remote session is not bound to a paired client identity.",
+                status: 401,
+              }),
+            );
+          }
+          const rawSocket = yield* Effect.orDie(request.upgrade);
+          const secureSocket = makeSecureRemoteServerSocket({
+            socket: rawSocket,
+            serverIdentity: yield* getSecureRemoteIdentity,
+            expectedClientIdentityPublicKey,
+          });
+          const wrappedRequest = Object.create(request) as HttpServerRequest.HttpServerRequest;
+          Object.defineProperty(wrappedRequest, "upgrade", {
+            configurable: true,
+            value: Effect.succeed(secureSocket),
+          });
+          const secureRpcWebSocketHttpEffect = rpcWebSocketHttpEffect.pipe(
+            Effect.provideService(HttpServerRequest.HttpServerRequest, wrappedRequest),
+          );
+          return yield* Effect.acquireUseRelease(
+            sessions.markConnected(authenticatedSession.sessionId),
+            () => secureRpcWebSocketHttpEffect,
+            () => sessions.markDisconnected(authenticatedSession.sessionId),
+          );
+        }
 
         if (!authenticatedSession) {
           return yield* rpcWebSocketHttpEffect;

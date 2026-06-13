@@ -17,14 +17,23 @@ import { type FilesystemBrowseResult, type ProviderKind } from "@t3tools/contrac
 import { isGenericChatThreadTitle } from "@t3tools/shared/chatThreads";
 import { BsChat } from "react-icons/bs";
 import { HiOutlineFolderOpen } from "react-icons/hi2";
-import { LuArrowDownToLine, LuArrowLeft, LuCornerLeftUp, LuFolderPlus } from "react-icons/lu";
+import {
+  LuArrowDownToLine,
+  LuArrowLeft,
+  LuCheck,
+  LuChevronRight,
+  LuCornerLeftUp,
+  LuFolderPlus,
+  LuHardDrive,
+  LuHouse,
+} from "react-icons/lu";
 import { type ComponentType, useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { FolderClosed } from "./FolderClosed";
 import { ProviderIcon as SharedProviderIcon } from "./ProviderIcon";
 import { formatRelativeTime } from "~/lib/relativeTime";
 import { readNativeApi } from "~/nativeApi";
-import { isMacPlatform } from "~/lib/utils";
+import { cn, isMacPlatform } from "~/lib/utils";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   appendBrowsePathSegment,
@@ -393,7 +402,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     canBrowse && !hasTrailingPathSeparator(query) ? getBrowseLeafPathSegment(query) : "";
   const expandedBrowsePath = canBrowse ? expandHomeInPath(browseDirectoryPath, props.homeDir) : "";
 
-  const { data: browseResult, isFetching: isBrowseFetching } =
+  const {
+    data: browseResult,
+    error: browseError,
+    isFetching: isBrowseFetching,
+  } =
     useQuery<FilesystemBrowseResult | null>({
       queryKey: ["sidebar-palette-browse", expandedBrowsePath],
       queryFn: async () => {
@@ -405,6 +418,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
       enabled: canBrowse && expandedBrowsePath.length > 0,
       staleTime: BROWSE_STALE_TIME_MS,
     });
+  const browseErrorMessage = browseError instanceof Error ? browseError.message : null;
 
   const browseEntries = browseResult?.entries ?? EMPTY_BROWSE_ENTRIES;
   const filteredBrowseEntries = useMemo(() => {
@@ -507,6 +521,21 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
     !isBrowseFetching;
 
   const browseSubmitLabel = willCreateMissingFolder ? "Create & Add" : "Add";
+  const browsePrimaryActionLabel = willCreateMissingFolder
+    ? "Create and add project"
+    : hasTrailingPathSeparator(query)
+      ? "Add this folder"
+      : "Add project";
+  const browseSubmitDisabled =
+    isAddingProject ||
+    unsupportedWindowsPath ||
+    (trimmedQuery.length === 0 && !highlightedFolderPath) ||
+    (!highlightedFolderPath && isExplicitRelativeProjectPath(trimmedQuery));
+  const currentBrowsePath = canBrowse
+    ? normalizeProjectPathForDispatch(
+        browseResult?.parentPath ?? expandHomeInPath(browseDirectoryPath, props.homeDir),
+      )
+    : "";
 
   const resolveBrowseSubmitPath = (): string => {
     if (highlightedFolderPath) {
@@ -593,7 +622,12 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
 
   return (
     <CommandDialog open={props.open} onOpenChange={props.onOpenChange}>
-      <CommandDialogPopup className="max-w-2xl">
+      <CommandDialogPopup
+        className={cn(
+          "max-w-2xl",
+          isBrowsing && "max-h-[calc(100dvh-1.5rem)] sm:max-h-105",
+        )}
+      >
         {props.mode === "import" ? (
           <div className="flex flex-col overflow-hidden">
             <div className="border-b border-border/70 px-4 py-3">
@@ -739,7 +773,11 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       )
                     }
                     className={
-                      isBrowsing ? (willCreateMissingFolder ? "pe-36" : "pe-24") : undefined
+                      isBrowsing
+                        ? willCreateMissingFolder
+                          ? "pe-4 sm:pe-36"
+                          : "pe-4 sm:pe-24"
+                        : undefined
                     }
                   />
                   {isBrowsing ? (
@@ -747,13 +785,8 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                       variant="outline"
                       size="xs"
                       tabIndex={-1}
-                      className="-translate-y-1/2 absolute end-3 top-1/2 gap-1.5 pe-1 ps-2"
-                      disabled={
-                        isAddingProject ||
-                        unsupportedWindowsPath ||
-                        (trimmedQuery.length === 0 && !highlightedFolderPath) ||
-                        (!highlightedFolderPath && isExplicitRelativeProjectPath(trimmedQuery))
-                      }
+                      className="-translate-y-1/2 absolute end-3 top-1/2 hidden gap-1.5 pe-1 ps-2 sm:inline-flex"
+                      disabled={browseSubmitDisabled}
                       onMouseDown={(event) => {
                         event.preventDefault();
                       }}
@@ -773,7 +806,47 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     </Button>
                   ) : null}
                 </div>
-                <CommandList className="max-h-[min(24rem,60vh)] not-empty:px-1.5 not-empty:pt-0 not-empty:pb-1.5">
+                {isBrowsing ? (
+                  <div className="border-t border-border/50 px-3 pt-2 pb-3 sm:px-4">
+                    <div className="mb-2 truncate text-[length:var(--app-font-size-ui-sm,11px)] text-muted-foreground">
+                      {currentBrowsePath || "Server filesystem"}
+                    </div>
+                    <div className="grid grid-cols-3 gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-10 min-w-0 gap-1.5 sm:h-8"
+                        disabled={!props.homeDir}
+                        onClick={() => setQuery(getInitialBrowseQuery(props.homeDir))}
+                      >
+                        <LuHouse className="size-4 shrink-0" />
+                        <span className="truncate">Home</span>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-10 min-w-0 gap-1.5 sm:h-8"
+                        onClick={() => setQuery("/")}
+                      >
+                        <LuHardDrive className="size-4 shrink-0" />
+                        <span className="truncate">Root</span>
+                      </Button>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-10 min-w-0 gap-1.5 sm:h-8"
+                        disabled={!browseParentPath}
+                        onClick={() => {
+                          if (browseParentPath) setQuery(browseParentPath);
+                        }}
+                      >
+                        <LuCornerLeftUp className="size-4 shrink-0" />
+                        <span className="truncate">Up</span>
+                      </Button>
+                    </div>
+                  </div>
+                ) : null}
+                <CommandList className="max-h-[min(30rem,58dvh)] not-empty:px-1.5 not-empty:pt-0 not-empty:pb-1.5 sm:max-h-[min(24rem,60vh)]">
                   {isBrowsing ? (
                     unsupportedWindowsPath ? (
                       <CommandEmpty className="py-10">
@@ -789,7 +862,7 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                               <CommandItem
                                 key="browse-up"
                                 value="__browse_up__"
-                                className="cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5"
+                                className="min-h-11 cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 sm:min-h-8 sm:px-2.5 sm:py-1.5"
                                 onMouseDown={(event) => {
                                   event.preventDefault();
                                 }}
@@ -807,22 +880,33 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                               <CommandItem
                                 key={entry.fullPath}
                                 value={`folder:${entry.fullPath}`}
-                                className="cursor-pointer items-center gap-2 rounded-lg px-2.5 py-1.5"
+                                className="min-h-11 cursor-pointer items-center gap-2 rounded-lg px-3 py-2.5 sm:min-h-8 sm:px-2.5 sm:py-1.5"
                                 onMouseDown={(event) => {
                                   event.preventDefault();
                                 }}
                                 onClick={() => setQuery(appendBrowsePathSegment(query, entry.name))}
                               >
-                                <FolderClosed className="size-3.5 text-muted-foreground/60" />
+                                <FolderClosed className="size-4 text-muted-foreground/70 sm:size-3.5 sm:text-muted-foreground/60" />
                                 <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                                   {entry.name}
                                 </span>
+                                <LuChevronRight className="size-4 shrink-0 text-muted-foreground/45" />
                               </CommandItem>
                             ))}
                           </CommandGroup>
                         ) : !isBrowseFetching ? (
                           <div className="px-3 py-2 text-sm text-muted-foreground">
                             No matching folders.
+                          </div>
+                        ) : null}
+                        {isBrowseFetching ? (
+                          <div className="px-3 py-2 text-sm text-muted-foreground">
+                            Loading folders...
+                          </div>
+                        ) : null}
+                        {browseErrorMessage ? (
+                          <div className="mx-1.5 mt-2 rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+                            {browseErrorMessage}
                           </div>
                         ) : null}
                         {willCreateMissingFolder ? (
@@ -1099,9 +1183,28 @@ export function SidebarSearchPalette(props: SidebarSearchPaletteProps) {
                     </CommandEmpty>
                   ) : null}
                 </CommandList>
-                <div className="h-1.5" />
+                {isBrowsing ? (
+                  <div className="border-t border-border/70 bg-[var(--color-background-surface-under)] p-3 sm:hidden">
+                    <Button
+                      className="h-11 w-full"
+                      disabled={browseSubmitDisabled}
+                      onClick={() => void submitBrowsePath()}
+                    >
+                      {isAddingProject ? (
+                        "Adding project..."
+                      ) : (
+                        <>
+                          <LuCheck className="size-4" />
+                          {browsePrimaryActionLabel}
+                        </>
+                      )}
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="h-1.5" />
+                )}
               </CommandPanel>
-              <CommandFooter>
+              <CommandFooter className={isBrowsing ? "hidden sm:flex" : undefined}>
                 {isBrowsing ? (
                   <>
                     <span>

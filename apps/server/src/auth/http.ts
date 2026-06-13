@@ -5,6 +5,7 @@ import {
   AuthCreatePairingCredentialInput,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
+  AuthSecureBootstrapInput,
 } from "@t3tools/contracts";
 import { DateTime, Effect, Schema } from "effect";
 import { HttpServerRequest, HttpServerResponse } from "effect/unstable/http";
@@ -33,6 +34,7 @@ export interface AuthHttpRouteOptions {
 }
 
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
+const decodeSecureBootstrapInput = Schema.decodeUnknownEffect(AuthSecureBootstrapInput);
 const decodeCreatePairingCredentialInput = Schema.decodeUnknownEffect(
   AuthCreatePairingCredentialInput,
 );
@@ -219,6 +221,35 @@ export const serveAuthHttpRoute = Effect.fn(function* (input: AuthHttpRouteOptio
       );
       const result = yield* input.serverAuth.exchangeBootstrapCredential(
         payload.credential,
+        deriveRequestClientMetadata(input.req),
+      );
+      respondJson(input.respond, 200, result.response, {
+        "Set-Cookie": encodeCookie({
+          name: input.sessionCredentials.cookieName,
+          value: result.sessionToken,
+          expiresAt: result.response.expiresAt,
+        }),
+      });
+      return;
+    }
+
+    if (method === "POST" && input.url.pathname === "/api/auth/bootstrap/secure") {
+      const payload = yield* readJsonBody(input.req, "Invalid secure bootstrap payload.").pipe(
+        Effect.flatMap((body) =>
+          decodeSecureBootstrapInput(body).pipe(
+            Effect.mapError(
+              (cause) =>
+                new AuthError({
+                  message: "Invalid secure bootstrap payload.",
+                  status: 400,
+                  cause,
+                }),
+            ),
+          ),
+        ),
+      );
+      const result = yield* input.serverAuth.exchangeSecureBootstrapCredential(
+        payload,
         deriveRequestClientMetadata(input.req),
       );
       respondJson(input.respond, 200, result.response, {

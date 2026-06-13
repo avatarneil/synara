@@ -69,6 +69,7 @@ function makeFakeServerAuth(): ServerAuthShape {
     subject: "owner",
     method: "browser-session-cookie" as const,
     role: "owner" as const,
+    client: { deviceType: "desktop" as const },
     expiresAt,
   };
   return {
@@ -91,6 +92,16 @@ function makeFakeServerAuth(): ServerAuthShape {
         sessionMethod: "bearer-session-token" as const,
         expiresAt,
         sessionToken: "bearer-session-token",
+      }),
+    exchangeSecureBootstrapCredential: () =>
+      Effect.succeed({
+        response: {
+          authenticated: true,
+          role: "client" as const,
+          sessionMethod: "browser-session-cookie" as const,
+          expiresAt,
+        },
+        sessionToken: "session-token",
       }),
     issuePairingCredential: () =>
       Effect.succeed({ id: "pairing-id", credential: "PAIRINGTOKEN", expiresAt }),

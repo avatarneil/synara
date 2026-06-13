@@ -1,4 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
+import { generateSecureRemoteIdentity } from "@t3tools/shared/secureRemote";
 import { Effect, Layer } from "effect";
 import { describe, expect, it } from "vitest";
 
@@ -112,6 +113,10 @@ describe("ServerAuthLive", () => {
         const serverAuth = yield* ServerAuth;
 
         const pairingCredential = yield* serverAuth.issuePairingCredential();
+        expect(pairingCredential.securePairing?.protocol).toBe("synara-remote-e2ee-v1");
+        expect(pairingCredential.securePairing?.serverDeviceId).toBeTruthy();
+        expect(pairingCredential.securePairing?.serverIdentityPublicKey).toBeTruthy();
+
         const exchanged = yield* serverAuth.exchangeBootstrapCredential(
           pairingCredential.credential,
           requestMetadata,
@@ -123,6 +128,37 @@ describe("ServerAuthLive", () => {
         expect(verified.sessionId.length).toBeGreaterThan(0);
         expect(verified.role).toBe("client");
         expect(verified.subject).toBe("one-time-token");
+      }),
+    );
+  });
+
+  it("binds secure bootstrap sessions to the paired client identity", async () => {
+    await runServerAuthTest(
+      Effect.gen(function* () {
+        const serverAuth = yield* ServerAuth;
+        const clientIdentity = generateSecureRemoteIdentity();
+        const pairingCredential = yield* serverAuth.issuePairingCredential();
+
+        const exchanged = yield* serverAuth.exchangeSecureBootstrapCredential(
+          {
+            credential: pairingCredential.credential,
+            clientDeviceId: clientIdentity.deviceId,
+            clientIdentityPublicKey: clientIdentity.identityPublicKey,
+          },
+          requestMetadata,
+        );
+        const verified = yield* serverAuth.authenticateHttpRequest(
+          makeCookieRequest(exchanged.sessionToken),
+        );
+        const websocketToken = yield* serverAuth.issueWebSocketToken(verified);
+        const upgraded = yield* serverAuth.authenticateWebSocketUpgrade({
+          headers: {},
+          cookies: {},
+          url: new URL(`ws://127.0.0.1:3773/?wsToken=${websocketToken.token}`),
+        });
+
+        expect(verified.client.identityPublicKey).toBe(clientIdentity.identityPublicKey);
+        expect(upgraded.client.identityPublicKey).toBe(clientIdentity.identityPublicKey);
       }),
     );
   });

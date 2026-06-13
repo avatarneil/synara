@@ -3,18 +3,29 @@
 // Layer: Routing
 
 import type { AuthBootstrapResult } from "@t3tools/contracts";
+import { decodeSecurePairingPayload } from "@t3tools/shared/secureRemote";
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
 import { requestAuthJson } from "~/lib/authHttp";
+import {
+  getOrCreateSecureRemoteClientIdentity,
+  saveTrustedSecureRemoteServer,
+} from "~/lib/secureRemoteState";
 
-function readPairingTokenFromLocation(): string | null {
-  if (typeof window === "undefined") return null;
+function readPairingParamsFromLocation(): {
+  readonly token: string | null;
+  readonly secure: string | null;
+} {
+  if (typeof window === "undefined") return { token: null, secure: null };
   const pageUrl = new URL(window.location.href);
-  const fromHash = new URLSearchParams(pageUrl.hash.slice(1)).get("token")?.trim();
-  if (fromHash) return fromHash;
-  return pageUrl.searchParams.get("token")?.trim() ?? null;
+  const hashParams = new URLSearchParams(pageUrl.hash.slice(1));
+  const token =
+    hashParams.get("token")?.trim() || pageUrl.searchParams.get("token")?.trim() || null;
+  const secure =
+    hashParams.get("secure")?.trim() || pageUrl.searchParams.get("secure")?.trim() || null;
+  return { token, secure };
 }
 
 function PairRouteView() {
@@ -28,17 +39,39 @@ function PairRouteView() {
     }
     bootstrapStartedRef.current = true;
 
-    const token = readPairingTokenFromLocation();
-    if (!token) {
+    const { token, secure } = readPairingParamsFromLocation();
+    if (!token && !secure) {
       setStatus("error");
       setErrorMessage("This pairing link is missing a token.");
       return;
     }
 
-    void requestAuthJson<AuthBootstrapResult>("/api/auth/bootstrap", {
-      method: "POST",
-      body: { credential: token },
-    })
+    const bootstrap = async () => {
+      if (!secure) {
+        if (!token) {
+          throw new Error("This pairing link is missing a token.");
+        }
+        await requestAuthJson<AuthBootstrapResult>("/api/auth/bootstrap", {
+          method: "POST",
+          body: { credential: token },
+        });
+        return;
+      }
+
+      const securePayload = decodeSecurePairingPayload(secure);
+      const clientIdentity = getOrCreateSecureRemoteClientIdentity();
+      await requestAuthJson<AuthBootstrapResult>("/api/auth/bootstrap/secure", {
+        method: "POST",
+        body: {
+          credential: securePayload.credential,
+          clientDeviceId: clientIdentity.deviceId,
+          clientIdentityPublicKey: clientIdentity.identityPublicKey,
+        },
+      });
+      saveTrustedSecureRemoteServer(securePayload);
+    };
+
+    void bootstrap()
       .then(() => {
         setStatus("success");
         window.location.replace("/");

@@ -24,12 +24,18 @@ import {
   type WsPushChannel,
   type WsPushMessage,
 } from "@t3tools/contracts";
+import { SECURE_REMOTE_WS_QUERY_PARAM } from "@t3tools/shared/secureRemote";
 import { Cause, Data, Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from "effect";
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 import { readPageLegacyAuthToken } from "./lib/authHttp";
+import {
+  getOrCreateSecureRemoteClientIdentity,
+  getTrustedSecureRemoteServerForSocketUrl,
+} from "./lib/secureRemoteState";
+import { SecureRemoteWebSocket } from "./lib/secureRemoteWebSocket";
 import { resolveUsableEnvWsUrl } from "./lib/wsUrlSource";
 import type { WsTransportState } from "./wsTransportEvents";
 
@@ -45,6 +51,7 @@ class WsTransportRpcError extends Data.TaggedError("WsTransportRpcError")<{
 }> {}
 
 const makeRpcClient = RpcClient.make(WsRpcGroup);
+const globalWebSocketConstructorLayer = Socket.layerWebSocketConstructorGlobal;
 
 function resolveRpcUrl(rawUrl: string): string {
   const url = new URL(rawUrl);
@@ -64,6 +71,35 @@ function appendPageAuthToken(rawUrl: string): string {
   } catch {
     return rawUrl;
   }
+}
+
+function appendSecureRemoteParam(rawUrl: string): string {
+  const url = new URL(rawUrl);
+  url.searchParams.set(SECURE_REMOTE_WS_QUERY_PARAM, "1");
+  return url.toString();
+}
+
+function resolveSocketConnection(rawUrl: string) {
+  const trustedServer = getTrustedSecureRemoteServerForSocketUrl(rawUrl);
+  if (!trustedServer) {
+    return {
+      url: rawUrl,
+      webSocketConstructorLayer: globalWebSocketConstructorLayer,
+    };
+  }
+
+  const clientIdentity = getOrCreateSecureRemoteClientIdentity();
+  return {
+    url: appendSecureRemoteParam(rawUrl),
+    webSocketConstructorLayer: Layer.succeed(Socket.WebSocketConstructor)(
+      (url, protocols) =>
+        new SecureRemoteWebSocket(url, protocols, {
+          nativeWebSocket: globalThis.WebSocket,
+          clientIdentity,
+          trustedServer,
+        }) as unknown as globalThis.WebSocket,
+    ),
+  };
 }
 
 function makeSocketUrl(explicitUrl: string | null): string {
@@ -105,9 +141,9 @@ async function resolveAuthenticatedSocketUrl(explicitUrl: string | null): Promis
   return socketUrl.toString();
 }
 
-function makeProtocolLayer(url: string) {
-  const socketLayer = Socket.layerWebSocket(url).pipe(
-    Layer.provide(Socket.layerWebSocketConstructorGlobal),
+function makeProtocolLayer(input: ReturnType<typeof resolveSocketConnection>) {
+  const socketLayer = Socket.layerWebSocket(input.url).pipe(
+    Layer.provide(input.webSocketConstructorLayer),
   );
   // JSON keeps the wire format symmetric with any server build: a serialization
   // mismatch on this single multiplexed socket is a hard connect failure, and the
@@ -309,7 +345,7 @@ export class WsTransport {
 
   private createSession(socketUrl: string) {
     const sessionVersion = ++this.sessionVersion;
-    const runtime = ManagedRuntime.make(makeProtocolLayer(socketUrl));
+    const runtime = ManagedRuntime.make(makeProtocolLayer(resolveSocketConnection(socketUrl)));
     const clientScope = runtime.runSync(Scope.make());
     const clientPromise = runtime
       .runPromise(Scope.provide(clientScope)(makeRpcClient))

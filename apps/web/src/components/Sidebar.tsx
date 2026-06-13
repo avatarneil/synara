@@ -2397,11 +2397,25 @@ export default function Sidebar() {
     }
   }, [isPickingFolder, addProjectFromPath]);
 
+  const openServerProjectBrowser = useCallback(() => {
+    setAddProjectError(null);
+    setNewCwd("");
+    setAddingProject(false);
+    setShowManualPathInput(false);
+    setSearchPaletteMode("search");
+    setSearchPaletteInitialQuery(getInitialBrowseQuery(homeDir));
+    setSearchPaletteOpen(true);
+  }, [homeDir]);
+
   const handleStartAddProject = useCallback(() => {
+    if (!isElectron) {
+      openServerProjectBrowser();
+      return;
+    }
     setAddProjectError(null);
     setShowManualPathInput(false);
     setAddingProject((prev) => !prev);
-  }, []);
+  }, [openServerProjectBrowser]);
 
   const currentProjectShortcutTargetId = useMemo(
     () => resolveCurrentProjectTargetId(projects, focusedProjectId),
@@ -5395,9 +5409,7 @@ export default function Sidebar() {
       if (command === "sidebar.addProject") {
         event.preventDefault();
         event.stopPropagation();
-        setSearchPaletteMode("search");
-        setSearchPaletteInitialQuery(getInitialBrowseQuery(homeDir));
-        setSearchPaletteOpen(true);
+        openServerProjectBrowser();
         return;
       }
       if (command === "sidebar.importThread") {
@@ -5485,6 +5497,7 @@ export default function Sidebar() {
     getCurrentSidebarShortcutContext,
     homeDir,
     navigate,
+    openServerProjectBrowser,
     searchPaletteMode,
     threadJumpCommandByThreadId,
     threadJumpThreadIds,
@@ -6048,6 +6061,15 @@ export default function Sidebar() {
                       }}
                       shortcutLabel={searchShortcutLabel}
                     />
+                    {!isElectron ? (
+                      <SidebarPrimaryAction
+                        icon={FolderIcon}
+                        label="Add project"
+                        active={searchPaletteOpen && searchPaletteInitialQuery !== null}
+                        onClick={openServerProjectBrowser}
+                        shortcutLabel={addProjectShortcutLabel}
+                      />
+                    ) : null}
                     <SidebarPrimaryAction
                       icon={KanbanIcon}
                       label="Kanban"

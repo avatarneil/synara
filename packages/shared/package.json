@@ -76,6 +76,10 @@
       "types": "./src/remoteAccess.ts",
       "import": "./src/remoteAccess.ts"
     },
+    "./secureRemote": {
+      "types": "./src/secureRemote.ts",
+      "import": "./src/secureRemote.ts"
+    },
     "./terminalThreads": {
       "types": "./src/terminalThreads.ts",
       "import": "./src/terminalThreads.ts"
@@ -143,6 +147,9 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@noble/ciphers": "^2.2.0",
+    "@noble/curves": "^2.2.0",
+    "@noble/hashes": "^2.2.0",
     "@t3tools/contracts": "workspace:*",
     "effect": "catalog:"
   },

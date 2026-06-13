@@ -7,6 +7,7 @@ import {
   AuthCreatePairingCredentialInput,
   AuthRevokeClientSessionInput,
   AuthRevokePairingLinkInput,
+  AuthSecureBootstrapInput,
 } from "@t3tools/contracts";
 import { EDITOR_ICON_ROUTE_PATH } from "@t3tools/shared/editorIcons";
 import { DateTime, Effect, Exit, FileSystem, Layer, Path, Schema, Stream } from "effect";
@@ -37,7 +38,10 @@ const SITE_FAVICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const SITE_FAVICON_CACHE_CONTROL_FALLBACK = "public, max-age=3600"; // 1 h (negative result)
 const EDITOR_ICON_CACHE_CONTROL_SUCCESS = "public, max-age=86400"; // 24 h
 const DESKTOP_APP_CORS_ORIGIN = "t3://app";
+const AUTH_CORS_ALLOWED_METHODS = "GET,POST,OPTIONS";
+const AUTH_CORS_ALLOWED_HEADERS = "Content-Type,Authorization";
 const decodeBootstrapInput = Schema.decodeUnknownEffect(AuthBootstrapInput);
+const decodeSecureBootstrapInput = Schema.decodeUnknownEffect(AuthSecureBootstrapInput);
 const decodeCreatePairingCredentialInput = Schema.decodeUnknownEffect(
   AuthCreatePairingCredentialInput,
 );
@@ -234,6 +238,35 @@ function localPreviewCorsHeaders(input: {
   };
 }
 
+function authCorsHeaders(input: {
+  readonly config: ServerConfigShape;
+  readonly origin: string | ReadonlyArray<string> | undefined;
+  readonly url: URL;
+  readonly requestHeaders?: string | ReadonlyArray<string> | undefined;
+}): Record<string, string> {
+  const origin = normalizeCorsOrigin(input.origin);
+  if (
+    !origin ||
+    (origin !== input.url.origin &&
+      origin !== input.config.devUrl?.origin &&
+      origin !== DESKTOP_APP_CORS_ORIGIN)
+  ) {
+    return {};
+  }
+
+  const requestedHeaders = Array.isArray(input.requestHeaders)
+    ? input.requestHeaders.join(", ")
+    : input.requestHeaders?.trim();
+  return {
+    "Access-Control-Allow-Origin": origin,
+    "Access-Control-Allow-Credentials": "true",
+    "Access-Control-Allow-Methods": AUTH_CORS_ALLOWED_METHODS,
+    "Access-Control-Allow-Headers": requestedHeaders || AUTH_CORS_ALLOWED_HEADERS,
+    "Access-Control-Max-Age": "600",
+    Vary: "Origin",
+  };
+}
+
 export function makeEffectHttpRouteLayer(readiness: ServerReadiness) {
   return Layer.mergeAll(
     HttpRouter.add(
@@ -302,14 +335,26 @@ const authEffectRouteLayer = HttpRouter.add(
   "/api/auth/*",
   Effect.gen(function* () {
     const request = yield* HttpServerRequest.HttpServerRequest;
+    const serverConfig = yield* ServerConfig;
     const serverAuth = yield* ServerAuth;
     const sessions = yield* SessionCredentialService;
     const url = HttpServerRequest.toURL(request);
     if (!url) return HttpServerResponse.text("Bad Request", { status: 400 });
+    const corsHeaders = authCorsHeaders({
+      config: serverConfig,
+      origin: request.headers.origin,
+      url,
+      requestHeaders: request.headers["access-control-request-headers"],
+    });
+    if (request.method === "OPTIONS") {
+      return HttpServerResponse.empty({ status: 204, headers: corsHeaders });
+    }
     const authRequest = makeEffectAuthRequest(request);
 
     if (request.method === "GET" && url.pathname === "/api/auth/session") {
-      return HttpServerResponse.jsonUnsafe(yield* serverAuth.getSessionState(authRequest));
+      return HttpServerResponse.jsonUnsafe(yield* serverAuth.getSessionState(authRequest), {
+        headers: corsHeaders,
+      });
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/bootstrap") {
@@ -329,6 +374,34 @@ const authEffectRouteLayer = HttpRouter.add(
       });
       return HttpServerResponse.jsonUnsafe(result.response, {
         headers: {
+          ...corsHeaders,
+          "Set-Cookie": encodeCookie({
+            name: sessions.cookieName,
+            value: result.sessionToken,
+            expiresAt: result.response.expiresAt,
+          }),
+        },
+      });
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/auth/bootstrap/secure") {
+      const payload = yield* readEffectJson(request, "Invalid secure bootstrap payload.").pipe(
+        Effect.flatMap(decodeSecureBootstrapInput),
+        Effect.mapError((cause) => ({
+          message: "Invalid secure bootstrap payload.",
+          status: 400 as const,
+          cause,
+        })),
+      );
+      const result = yield* serverAuth.exchangeSecureBootstrapCredential(payload, {
+        ...deriveAuthClientMetadata({
+          headers: request.headers,
+          remoteAddress: request.remoteAddress ?? null,
+        }),
+      });
+      return HttpServerResponse.jsonUnsafe(result.response, {
+        headers: {
+          ...corsHeaders,
           "Set-Cookie": encodeCookie({
             name: sessions.cookieName,
             value: result.sessionToken,
@@ -354,12 +427,15 @@ const authEffectRouteLayer = HttpRouter.add(
             remoteAddress: request.remoteAddress ?? null,
           }),
         }),
+        { headers: corsHeaders },
       );
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/ws-token") {
       const session = yield* serverAuth.authenticateHttpRequest(authRequest);
-      return HttpServerResponse.jsonUnsafe(yield* serverAuth.issueWebSocketToken(session));
+      return HttpServerResponse.jsonUnsafe(yield* serverAuth.issueWebSocketToken(session), {
+        headers: corsHeaders,
+      });
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/pairing-token") {
@@ -375,14 +451,18 @@ const authEffectRouteLayer = HttpRouter.add(
               })),
             )
           : {};
-      return HttpServerResponse.jsonUnsafe(yield* serverAuth.issuePairingCredential(payload));
+      return HttpServerResponse.jsonUnsafe(yield* serverAuth.issuePairingCredential(payload), {
+        headers: corsHeaders,
+      });
     }
 
     const ownerSession = serverAuth.authenticateOwnerHttpRequest(authRequest);
 
     if (request.method === "GET" && url.pathname === "/api/auth/pairing-links") {
       yield* ownerSession;
-      return HttpServerResponse.jsonUnsafe(yield* serverAuth.listPairingLinks());
+      return HttpServerResponse.jsonUnsafe(yield* serverAuth.listPairingLinks(), {
+        headers: corsHeaders,
+      });
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/pairing-links/revoke") {
@@ -395,14 +475,19 @@ const authEffectRouteLayer = HttpRouter.add(
           cause,
         })),
       );
-      return HttpServerResponse.jsonUnsafe({
-        revoked: yield* serverAuth.revokePairingLink(payload.id),
-      });
+      return HttpServerResponse.jsonUnsafe(
+        {
+          revoked: yield* serverAuth.revokePairingLink(payload.id),
+        },
+        { headers: corsHeaders },
+      );
     }
 
     if (request.method === "GET" && url.pathname === "/api/auth/clients") {
       const session = yield* ownerSession;
-      return HttpServerResponse.jsonUnsafe(yield* serverAuth.listClientSessions(session.sessionId));
+      return HttpServerResponse.jsonUnsafe(yield* serverAuth.listClientSessions(session.sessionId), {
+        headers: corsHeaders,
+      });
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/clients/revoke") {
@@ -415,19 +500,25 @@ const authEffectRouteLayer = HttpRouter.add(
           cause,
         })),
       );
-      return HttpServerResponse.jsonUnsafe({
-        revoked: yield* serverAuth.revokeClientSession(session.sessionId, payload.sessionId),
-      });
+      return HttpServerResponse.jsonUnsafe(
+        {
+          revoked: yield* serverAuth.revokeClientSession(session.sessionId, payload.sessionId),
+        },
+        { headers: corsHeaders },
+      );
     }
 
     if (request.method === "POST" && url.pathname === "/api/auth/clients/revoke-others") {
       const session = yield* ownerSession;
-      return HttpServerResponse.jsonUnsafe({
-        revokedCount: yield* serverAuth.revokeOtherClientSessions(session.sessionId),
-      });
+      return HttpServerResponse.jsonUnsafe(
+        {
+          revokedCount: yield* serverAuth.revokeOtherClientSessions(session.sessionId),
+        },
+        { headers: corsHeaders },
+      );
     }
 
-    return HttpServerResponse.text("Not Found", { status: 404 });
+    return HttpServerResponse.text("Not Found", { status: 404, headers: corsHeaders });
   }).pipe(
     Effect.catch((error) =>
       Effect.succeed(
@@ -844,14 +935,31 @@ export function createHttpRequestHandler({
         }
 
         if (url.pathname.startsWith("/api/auth/")) {
-          if (!serverAuth || !sessionCredentials) {
-            respond(503, { "Content-Type": "text/plain" }, "Auth service unavailable");
+          const corsHeaders = authCorsHeaders({
+            config: serverConfig,
+            origin: req.headers.origin,
+            url,
+            requestHeaders: req.headers["access-control-request-headers"],
+          });
+          if (req.method === "OPTIONS") {
+            respond(204, corsHeaders);
             return;
           }
+          if (!serverAuth || !sessionCredentials) {
+            respond(
+              503,
+              { "Content-Type": "text/plain", ...corsHeaders },
+              "Auth service unavailable",
+            );
+            return;
+          }
+          const authRespond: Respond = (statusCode, headers, body) => {
+            respond(statusCode, { ...headers, ...corsHeaders }, body);
+          };
           const handled = yield* serveAuthHttpRoute({
             url,
             req,
-            respond,
+            respond: authRespond,
             serverAuth,
             sessionCredentials,
           });

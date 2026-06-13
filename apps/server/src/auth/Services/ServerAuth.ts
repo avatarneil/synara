@@ -5,6 +5,7 @@ import type {
   AuthClientSession,
   AuthCreatePairingCredentialInput,
   AuthPairingCredentialResult,
+  AuthSecureBootstrapInput,
   AuthPairingLink,
   AuthSessionId,
   AuthSessionState,
@@ -28,6 +29,7 @@ export interface AuthenticatedSession {
   readonly subject: string;
   readonly method: ServerAuthSessionMethod;
   readonly role: SessionRole;
+  readonly client: AuthClientMetadata;
   readonly expiresAt?: DateTime.DateTime;
 }
 
@@ -54,6 +56,16 @@ export interface ServerAuthShape {
     credential: string,
     requestMetadata: AuthClientMetadata,
   ) => Effect.Effect<AuthBearerBootstrapResult, AuthError>;
+  readonly exchangeSecureBootstrapCredential: (
+    input: AuthSecureBootstrapInput,
+    requestMetadata: AuthClientMetadata,
+  ) => Effect.Effect<
+    {
+      readonly response: AuthBootstrapResult;
+      readonly sessionToken: string;
+    },
+    AuthError
+  >;
   readonly issuePairingCredential: (
     input?: AuthCreatePairingCredentialInput & {
       readonly role?: SessionRole;
