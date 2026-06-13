@@ -10,6 +10,19 @@ import { Schema } from "effect";
 
 const SETTINGS_FILE_NAME = "settings.json";
 
+export function resolveDesktopBackendStateDir(
+  baseDir: string,
+  devUrl: string | URL | null | undefined,
+): string {
+  const hasDevUrl =
+    devUrl instanceof URL
+      ? true
+      : typeof devUrl === "string"
+        ? devUrl.trim().length > 0
+        : false;
+  return Path.join(baseDir, hasDevUrl ? "dev" : "userdata");
+}
+
 export function resolveDesktopSettingsPath(stateDir: string): string {
   return Path.join(stateDir, SETTINGS_FILE_NAME);
 }

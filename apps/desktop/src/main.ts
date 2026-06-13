@@ -113,7 +113,10 @@ import {
   DESKTOP_RUNTIME_INFO_CHANNEL,
 } from "./desktopRuntimeBridge";
 import { listLanIpv4Addresses, resolveTailnetIpv4 } from "./networkAddresses";
-import { readRemoteAccessSettingsFromDisk } from "./remoteAccessSettings";
+import {
+  readRemoteAccessSettingsFromDisk,
+  resolveDesktopBackendStateDir,
+} from "./remoteAccessSettings";
 import {
   buildReachableHttpUrls,
   formatHostForUrl,
@@ -158,10 +161,10 @@ const BASE_DIR =
   process.env.DPCODE_HOME?.trim() ||
   process.env.T3CODE_HOME?.trim() ||
   Path.join(OS.homedir(), ".synara");
-const STATE_DIR = Path.join(BASE_DIR, "userdata");
+const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
+const STATE_DIR = resolveDesktopBackendStateDir(BASE_DIR, process.env.VITE_DEV_SERVER_URL);
 const DESKTOP_SCHEME = "t3";
 const ROOT_DIR = Path.resolve(__dirname, "../../..");
-const isDevelopment = Boolean(process.env.VITE_DEV_SERVER_URL);
 const APP_DISPLAY_NAME = isDevelopment ? "Synara (Dev)" : "Synara";
 const APP_USER_MODEL_ID = isDevelopment ? "com.t3tools.synara.dev" : "com.t3tools.synara";
 const COMMIT_HASH_PATTERN = /^[0-9a-f]{7,40}$/i;
