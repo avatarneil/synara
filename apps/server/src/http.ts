@@ -59,6 +59,78 @@ interface HttpPayload {
   readonly body: string | Uint8Array;
 }
 
+interface DevProxyPayload {
+  readonly statusCode: number;
+  readonly headers: Record<string, string>;
+  readonly body: Uint8Array;
+}
+
+const HOP_BY_HOP_HEADERS = new Set([
+  "connection",
+  "content-length",
+  "keep-alive",
+  "proxy-authenticate",
+  "proxy-authorization",
+  "te",
+  "trailer",
+  "transfer-encoding",
+  "upgrade",
+]);
+
+function resolveDevProxyUrl(devUrl: URL, requestUrl: URL): URL {
+  const target = new URL(devUrl.toString());
+  target.pathname = requestUrl.pathname;
+  target.search = requestUrl.search;
+  target.hash = "";
+  return target;
+}
+
+function copyProxyResponseHeaders(headers: Headers): Record<string, string> {
+  const copied: Record<string, string> = {};
+  for (const [key, value] of headers.entries()) {
+    const normalizedKey = key.toLowerCase();
+    if (HOP_BY_HOP_HEADERS.has(normalizedKey)) continue;
+    copied[key] = value;
+  }
+  return copied;
+}
+
+const fetchDevProxyPayload = Effect.fn(function* (input: {
+  readonly devUrl: URL;
+  readonly requestUrl: URL;
+  readonly method?: string;
+}) {
+  const target = resolveDevProxyUrl(input.devUrl, input.requestUrl);
+  return yield* Effect.tryPromise({
+    try: async () => {
+      const response = await fetch(target, {
+        method: input.method ?? "GET",
+        redirect: "manual",
+      });
+      return {
+        statusCode: response.status,
+        headers: copyProxyResponseHeaders(response.headers),
+        body: new Uint8Array(await response.arrayBuffer()),
+      } satisfies DevProxyPayload;
+    },
+    catch: (cause) => cause,
+  });
+});
+
+function devProxyPayloadToEffectResponse(payload: DevProxyPayload) {
+  const contentType = payload.headers["content-type"] ?? "application/octet-stream";
+  const { "content-type": _contentType, ...headers } = payload.headers;
+  return HttpServerResponse.uint8Array(payload.body, {
+    status: payload.statusCode,
+    contentType,
+    headers,
+  });
+}
+
+function respondDevProxyPayload(respond: Respond, payload: DevProxyPayload) {
+  respond(payload.statusCode, payload.headers, payload.body);
+}
+
 // Shared by the Effect route and the legacy request listener so editor-icon
 // behavior cannot drift between the two HTTP stacks.
 const resolveEditorIconHttpPayload = Effect.fn(function* (input: {
@@ -610,7 +682,20 @@ const staticAndDevEffectRouteLayer = HttpRouter.add(
 
     const config = yield* ServerConfig;
     if (config.devUrl) {
-      return HttpServerResponse.redirect(config.devUrl.toString(), { status: 302 });
+      const payload = yield* fetchDevProxyPayload({
+        devUrl: config.devUrl,
+        requestUrl: url,
+        method: "GET",
+      }).pipe(
+        Effect.catch(() =>
+          Effect.succeed({
+            statusCode: 502,
+            headers: { "Content-Type": "text/plain" },
+            body: new TextEncoder().encode("Dev web server unavailable."),
+          } satisfies DevProxyPayload),
+        ),
+      );
+      return devProxyPayloadToEffectResponse(payload);
     }
 
     if (!config.staticDir) {
@@ -785,7 +870,20 @@ export function createHttpRequestHandler({
         }
 
         if (devUrl) {
-          respond(302, { Location: devUrl.href });
+          const payload = yield* fetchDevProxyPayload({
+            devUrl,
+            requestUrl: url,
+            method: req.method ?? "GET",
+          }).pipe(
+            Effect.catch(() =>
+              Effect.succeed({
+                statusCode: 502,
+                headers: { "Content-Type": "text/plain" },
+                body: new TextEncoder().encode("Dev web server unavailable."),
+              } satisfies DevProxyPayload),
+            ),
+          );
+          respondDevProxyPayload(respond, payload);
           return;
         }
 

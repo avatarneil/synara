@@ -2,11 +2,12 @@
 // Purpose: Bootstrap a remote browser session from a one-time pairing link (#token=…).
 // Layer: Routing
 
+import type { AuthBootstrapResult } from "@t3tools/contracts";
 import { createFileRoute } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { Button } from "~/components/ui/button";
-import { ensureNativeApi } from "~/nativeApi";
+import { requestAuthJson } from "~/lib/authHttp";
 
 function readPairingTokenFromLocation(): string | null {
   if (typeof window === "undefined") return null;
@@ -19,8 +20,14 @@ function readPairingTokenFromLocation(): string | null {
 function PairRouteView() {
   const [status, setStatus] = useState<"pending" | "success" | "error">("pending");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const bootstrapStartedRef = useRef(false);
 
   useEffect(() => {
+    if (bootstrapStartedRef.current) {
+      return;
+    }
+    bootstrapStartedRef.current = true;
+
     const token = readPairingTokenFromLocation();
     if (!token) {
       setStatus("error");
@@ -28,8 +35,10 @@ function PairRouteView() {
       return;
     }
 
-    void ensureNativeApi()
-      .server.bootstrapAuth({ credential: token })
+    void requestAuthJson<AuthBootstrapResult>("/api/auth/bootstrap", {
+      method: "POST",
+      body: { credential: token },
+    })
       .then(() => {
         setStatus("success");
         window.location.replace("/");

@@ -310,15 +310,16 @@ describe("createHttpRequestHandler", () => {
     });
   });
 
-  it("preserves dev URL redirect behavior", async () => {
+  it("returns a dev proxy error when the dev URL is unavailable", async () => {
     const config = await makeConfig({ devUrl: new URL("http://localhost:5173/") });
     const handler = await makeHandler(config);
 
     await withServer(handler, async (origin) => {
       const response = await fetch(`${origin}/anything`, { redirect: "manual" });
 
-      expect(response.status).toBe(302);
-      expect(response.headers.get("location")).toBe("http://localhost:5173/");
+      expect(response.status).toBe(502);
+      expect(response.headers.get("location")).toBeNull();
+      await expect(response.text()).resolves.toBe("Dev web server unavailable.");
     });
   });
 
@@ -395,6 +396,30 @@ describe("createHttpRequestHandler", () => {
         },
       });
     });
+  });
+
+  it("proxies dev web requests instead of redirecting to localhost", async () => {
+    await withServer(
+      (req, res) => {
+        res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+        res.end(`dev:${req.url ?? ""}`);
+      },
+      async (devOrigin) => {
+        const config = await makeConfig({ devUrl: new URL(devOrigin) });
+        const handler = await makeHandler(config);
+
+        await withServer(handler, async (origin) => {
+          const response = await fetch(`${origin}/workspace?from=remote`, {
+            redirect: "manual",
+          });
+
+          expect(response.status).toBe(200);
+          expect(response.headers.get("location")).toBeNull();
+          expect(response.headers.get("content-type")).toContain("text/html");
+          await expect(response.text()).resolves.toBe("dev:/workspace?from=remote");
+        });
+      },
+    );
   });
 
   it("sets a session cookie on auth bootstrap", async () => {

@@ -4,22 +4,41 @@
 // Layer: Web utility
 // Exports: resolveWsHttpUrl, toAttachmentPreviewUrl
 
+import { resolveUsableEnvWsUrl } from "./wsUrlSource";
+
 // Build a fully-qualified HTTP URL for `rawPath` against the same server the WS connection uses.
 // On desktop the page is served from a custom protocol scheme, so <img>/<a download> with a
 // relative path never reaches the server. We mirror the WS host and forward the legacy token
 // query param so authenticated GET routes (attachments, local-image, …) can authorize the
 // request without touching cookies.
+function resolveBrowserOrigin(): string | null {
+  const location = window.location;
+  if (!location) {
+    return null;
+  }
+  if (typeof location.origin === "string" && location.origin.length > 0) {
+    return location.origin;
+  }
+  if (typeof location.protocol === "string" && typeof location.hostname === "string") {
+    const port =
+      typeof location.port === "string" && location.port.length > 0 ? `:${location.port}` : "";
+    return `${location.protocol}//${location.hostname}${port}`;
+  }
+  return null;
+}
+
 export function resolveWsHttpUrl(rawPath: string): string {
   if (typeof window === "undefined") return rawPath;
   const bridgeWsUrl = window.desktopBridge?.getWsUrl?.();
-  const envWsUrl = import.meta.env.VITE_WS_URL as string | undefined;
+  const envWsUrl = resolveUsableEnvWsUrl(import.meta.env.VITE_WS_URL as string | undefined);
   const wsCandidate =
     typeof bridgeWsUrl === "string" && bridgeWsUrl.length > 0
       ? bridgeWsUrl
-      : typeof envWsUrl === "string" && envWsUrl.length > 0
+      : envWsUrl
         ? envWsUrl
         : null;
-  if (!wsCandidate) return new URL(rawPath, window.location.origin).toString();
+  const browserOrigin = resolveBrowserOrigin();
+  if (!wsCandidate) return browserOrigin ? new URL(rawPath, browserOrigin).toString() : rawPath;
   try {
     const wsUrl = new URL(wsCandidate);
     const protocol =
@@ -31,7 +50,7 @@ export function resolveWsHttpUrl(rawPath: string): string {
     }
     return httpUrl.toString();
   } catch {
-    return new URL(rawPath, window.location.origin).toString();
+    return browserOrigin ? new URL(rawPath, browserOrigin).toString() : rawPath;
   }
 }
 

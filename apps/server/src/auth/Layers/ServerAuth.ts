@@ -182,6 +182,7 @@ export const makeServerAuth = Effect.gen(function* () {
           ({
             authenticated: true,
             auth: descriptor,
+            requiresAuthentication: Boolean(serverConfig.authToken),
             role: session.role,
             sessionMethod: session.method,
             ...(session.expiresAt ? { expiresAt: DateTime.toUtc(session.expiresAt) } : {}),
@@ -191,6 +192,7 @@ export const makeServerAuth = Effect.gen(function* () {
         Effect.succeed({
           authenticated: false,
           auth: descriptor,
+          requiresAuthentication: Boolean(serverConfig.authToken),
         } satisfies AuthSessionState),
       ),
     );

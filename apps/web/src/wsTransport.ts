@@ -29,6 +29,8 @@ import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
 import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
+import { readPageLegacyAuthToken } from "./lib/authHttp";
+import { resolveUsableEnvWsUrl } from "./lib/wsUrlSource";
 import type { WsTransportState } from "./wsTransportEvents";
 
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
@@ -50,19 +52,6 @@ function resolveRpcUrl(rawUrl: string): string {
   return url.toString();
 }
 
-function readPageLegacyAuthToken(): string | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const pageUrl = new URL(window.location.href);
-    const fromSearch = pageUrl.searchParams.get("token")?.trim();
-    if (fromSearch) return fromSearch;
-    const fromHash = new URLSearchParams(pageUrl.hash.slice(1)).get("token")?.trim();
-    return fromHash && fromHash.length > 0 ? fromHash : null;
-  } catch {
-    return null;
-  }
-}
-
 function appendPageAuthToken(rawUrl: string): string {
   const token = readPageLegacyAuthToken();
   if (!token) return rawUrl;
@@ -80,11 +69,11 @@ function appendPageAuthToken(rawUrl: string): string {
 function makeSocketUrl(explicitUrl: string | null): string {
   if (explicitUrl) return appendPageAuthToken(resolveRpcUrl(explicitUrl));
   const bridgeUrl = window.desktopBridge?.getWsUrl();
-  const envUrl = import.meta.env.VITE_WS_URL as string | undefined;
+  const envUrl = resolveUsableEnvWsUrl(import.meta.env.VITE_WS_URL as string | undefined);
   const rawUrl =
     bridgeUrl && bridgeUrl.length > 0
       ? bridgeUrl
-      : envUrl && envUrl.length > 0
+      : envUrl
         ? envUrl
         : `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.hostname}:${window.location.port}`;
   return appendPageAuthToken(resolveRpcUrl(rawUrl));

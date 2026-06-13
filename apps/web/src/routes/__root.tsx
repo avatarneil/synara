@@ -7,6 +7,7 @@ import {
   type OrchestrationThread,
   type ServerConfig,
   type ServerProviderStatus,
+  type AuthSessionState,
 } from "@t3tools/contracts";
 import { defaultTerminalTitleForCliKind } from "@t3tools/shared/terminalThreads";
 import {
@@ -17,12 +18,21 @@ import {
   useParams,
   useRouterState,
 } from "@tanstack/react-router";
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import {
+  type ReactNode,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { QueryClient, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Throttler } from "@tanstack/react-pacer";
 
 import { APP_DISPLAY_NAME } from "../branding";
 import { DesktopWindowControls } from "../components/DesktopWindowControls";
+import { RemoteAuthGate } from "../components/RemoteAuthGate";
 import { SETTINGS_TARGETS } from "../settingsNavigation";
 import ShortcutsDialog from "../components/ShortcutsDialog";
 import WhatsNewDialog from "../components/WhatsNewDialog";
@@ -74,6 +84,7 @@ import { usePreloadSettingsRoute } from "../hooks/usePreloadSettingsRoute";
 import { useSyncDesktopTopBarTrafficLightGutterZoom } from "../hooks/useDesktopTopBarGutter";
 import { useTheme } from "../hooks/useTheme";
 import { useNativeFontSmoothing } from "../hooks/useNativeFontSmoothing";
+import { hasAmbientServerCredential, requestAuthJson } from "../lib/authHttp";
 import { invalidateGitQueries, invalidateGitQueriesForCwds } from "../lib/gitReactQuery";
 import { hasLiveThreadsWithMissingProjects } from "../lib/desktopProjectRecovery";
 import { useDiffRouteSearch } from "../hooks/useDiffRouteSearch";
@@ -145,12 +156,16 @@ export const Route = createRootRouteWithContext<{
 });
 
 function RootRouteView() {
-  useAppTypography();
-  useAppDensity();
-  usePreloadSettingsRoute();
-  useNativeFontSmoothing();
-  useSyncDesktopTopBarTrafficLightGutterZoom();
-  useTheme();
+  const queryClient = useQueryClient();
+  const pathname = useRouterState({ select: (state) => state.location.pathname });
+  const shouldCheckRemoteAuth = pathname !== "/pair" && !hasAmbientServerCredential();
+  const authSessionQuery = useQuery({
+    queryKey: serverQueryKeys.authSession(),
+    queryFn: () => requestAuthJson<AuthSessionState>("/api/auth/session"),
+    enabled: shouldCheckRemoteAuth,
+    retry: false,
+    staleTime: 15_000,
+  });
 
   // Single mount point for the Windows caption buttons. The cluster is pinned to the
   // window's top-right corner (frameless Windows shell) and renders nothing on macOS,
@@ -169,7 +184,7 @@ function RootRouteView() {
   // so it also stays clickable while a modal is open.)
   const desktopWindowControls = <DesktopWindowControls className="fixed top-0 right-0 z-[250]" />;
 
-  if (!readNativeApi()) {
+  if (shouldCheckRemoteAuth && authSessionQuery.isPending) {
     return (
       <>
         <div className="flex h-screen flex-col bg-background text-foreground">
@@ -183,6 +198,48 @@ function RootRouteView() {
       </>
     );
   }
+
+  if (
+    shouldCheckRemoteAuth &&
+    authSessionQuery.data?.requiresAuthentication === true &&
+    !authSessionQuery.data.authenticated
+  ) {
+    return (
+      <>
+        <RemoteAuthGate
+          onAuthenticated={() => {
+            queryClient.removeQueries({ queryKey: serverQueryKeys.authSession() });
+            window.location.replace("/");
+          }}
+        />
+        {desktopWindowControls}
+      </>
+    );
+  }
+
+  if (pathname === "/pair") {
+    return (
+      <>
+        <Outlet />
+        {desktopWindowControls}
+      </>
+    );
+  }
+
+  return <AuthenticatedRootView desktopWindowControls={desktopWindowControls} />;
+}
+
+function AuthenticatedRootView({
+  desktopWindowControls,
+}: {
+  readonly desktopWindowControls: ReactNode;
+}) {
+  useAppTypography();
+  useAppDensity();
+  usePreloadSettingsRoute();
+  useNativeFontSmoothing();
+  useSyncDesktopTopBarTrafficLightGutterZoom();
+  useTheme();
 
   return (
     <>

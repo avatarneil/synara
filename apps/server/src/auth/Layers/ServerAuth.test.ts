@@ -127,6 +127,34 @@ describe("ServerAuthLive", () => {
     );
   });
 
+  it("reports when HTTP sessions need authentication", async () => {
+    const state = await Effect.gen(function* () {
+      const serverAuth = yield* ServerAuth;
+      return yield* serverAuth.getSessionState({ headers: {}, cookies: {} });
+    }).pipe(
+      Effect.provide(makeTestLayer({ authToken: "desktop-secret" })),
+      Effect.scoped,
+      Effect.runPromise,
+    );
+
+    expect(state.authenticated).toBe(false);
+    expect(state.requiresAuthentication).toBe(true);
+  });
+
+  it("reports tokenless servers as not requiring authentication", async () => {
+    const state = await Effect.gen(function* () {
+      const serverAuth = yield* ServerAuth;
+      return yield* serverAuth.getSessionState({ headers: {}, cookies: {} });
+    }).pipe(
+      Effect.provide(makeTestLayer({ authToken: undefined })),
+      Effect.scoped,
+      Effect.runPromise,
+    );
+
+    expect(state.authenticated).toBe(false);
+    expect(state.requiresAuthentication).toBe(false);
+  });
+
   it("issues startup pairing URLs that bootstrap owner sessions", async () => {
     await runServerAuthTest(
       Effect.gen(function* () {

@@ -38,7 +38,7 @@ import {
 
 import { showConfirmDialogFallback } from "./confirmDialogFallback";
 import { showContextMenuFallback } from "./contextMenuFallback";
-import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
+import { requestAuthJson } from "./lib/authHttp";
 import { WsTransport } from "./wsTransport";
 import { emitWsTransportState } from "./wsTransportEvents";
 
@@ -98,38 +98,6 @@ function defaultBrowserTitle(url: string): string {
   } catch {
     return url;
   }
-}
-
-async function requestAuthJson<T>(
-  path: string,
-  options: {
-    readonly method?: "GET" | "POST";
-    readonly body?: unknown;
-  } = {},
-): Promise<T> {
-  const hasBody = options.body !== undefined;
-  const response = await fetch(resolveWsHttpUrl(path), {
-    method: options.method ?? "GET",
-    credentials: "same-origin",
-    ...(hasBody
-      ? {
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(options.body),
-        }
-      : {}),
-  });
-  const payload = (await response.json().catch(() => null)) as unknown;
-  if (!response.ok) {
-    const message =
-      payload &&
-      typeof payload === "object" &&
-      "error" in payload &&
-      typeof payload.error === "string"
-        ? payload.error
-        : `Auth request failed with status ${response.status}`;
-    throw new Error(message);
-  }
-  return payload as T;
 }
 
 function createFallbackTab(url = "about:blank") {
