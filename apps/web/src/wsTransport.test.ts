@@ -56,15 +56,42 @@ class MockWebSocket {
 }
 
 const originalWebSocket = globalThis.WebSocket;
+const originalFetch = globalThis.fetch;
+
+async function waitForSocket(): Promise<MockWebSocket> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const socket = sockets.at(-1);
+    if (socket) {
+      return socket;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  throw new Error("Expected WebSocket to be created");
+}
 
 beforeEach(() => {
   sockets.length = 0;
   vi.stubEnv("VITE_WS_URL", "");
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue({
+      ok: false,
+      json: async () => null,
+    }),
+  );
 
   Object.defineProperty(globalThis, "window", {
     configurable: true,
     value: {
-      location: { protocol: "http:", hostname: "localhost", port: "3020" },
+      location: {
+        protocol: "http:",
+        hostname: "localhost",
+        port: "3020",
+        origin: "http://localhost:3020",
+        href: "http://localhost:3020/",
+        search: "",
+        hash: "",
+      },
       desktopBridge: undefined,
     },
   });
@@ -74,6 +101,7 @@ beforeEach(() => {
 
 afterEach(() => {
   globalThis.WebSocket = originalWebSocket;
+  globalThis.fetch = originalFetch;
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
 });
@@ -92,16 +120,16 @@ describe("WsTransport", () => {
     expect(shouldKeepServerLifecycleStream(new Set([WS_CHANNELS.serverConfigUpdated]))).toBe(false);
   });
 
-  it("normalizes explicit websocket URLs to the RPC endpoint", () => {
+  it("normalizes explicit websocket URLs to the RPC endpoint", async () => {
     const transport = new WsTransport("ws://localhost:3020");
+    const socket = await waitForSocket();
 
-    expect(sockets[0]?.url).toBe("ws://localhost:3020/ws");
-    expect(transport.getState()).toBe("connecting");
+    expect(socket.url).toBe("ws://localhost:3020/ws");
 
     transport.dispose();
   });
 
-  it("uses the desktop bridge URL before falling back to the browser location", () => {
+  it("uses the desktop bridge URL before falling back to the browser location", async () => {
     const getWsUrl = vi.fn().mockReturnValue("ws://127.0.0.1:53036/?token=old");
     Object.defineProperty(globalThis, "window", {
       configurable: true,
@@ -112,22 +140,24 @@ describe("WsTransport", () => {
     });
 
     const transport = new WsTransport();
+    const socket = await waitForSocket();
 
     expect(getWsUrl).toHaveBeenCalledTimes(1);
-    expect(sockets[0]?.url).toBe("ws://127.0.0.1:53036/ws?token=old");
+    expect(socket.url).toBe("ws://127.0.0.1:53036/ws?token=old");
 
     transport.dispose();
   });
 
-  it("falls back to the current browser host when no desktop bridge URL exists", () => {
+  it("falls back to the current browser host when no desktop bridge URL exists", async () => {
     const transport = new WsTransport();
+    const socket = await waitForSocket();
 
-    expect(sockets[0]?.url).toBe("ws://localhost:3020/ws");
+    expect(socket.url).toBe("ws://localhost:3020/ws");
 
     transport.dispose();
   });
 
-  it("forwards page URL auth tokens to the websocket connection", () => {
+  it("forwards page URL auth tokens to the websocket connection", async () => {
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: {
@@ -135,6 +165,7 @@ describe("WsTransport", () => {
           protocol: "http:",
           hostname: "100.64.0.10",
           port: "3773",
+          origin: "http://100.64.0.10:3773",
           href: "http://100.64.0.10:3773/?token=remote-secret",
           search: "?token=remote-secret",
           hash: "",
@@ -144,8 +175,43 @@ describe("WsTransport", () => {
     });
 
     const transport = new WsTransport();
+    const socket = await waitForSocket();
 
-    expect(sockets[0]?.url).toBe("ws://100.64.0.10:3773/ws?token=remote-secret");
+    expect(socket.url).toBe("ws://100.64.0.10:3773/ws?token=remote-secret");
+
+    transport.dispose();
+  });
+
+  it("appends a wsToken from the auth endpoint for paired browser sessions", async () => {
+    vi.mocked(globalThis.fetch).mockResolvedValue({
+      ok: true,
+      json: async () => ({ token: "paired-ws-token" }),
+    } as Response);
+
+    Object.defineProperty(globalThis, "window", {
+      configurable: true,
+      value: {
+        location: {
+          protocol: "http:",
+          hostname: "100.64.0.10",
+          port: "3773",
+          origin: "http://100.64.0.10:3773",
+          href: "http://100.64.0.10:3773/",
+          search: "",
+          hash: "",
+        },
+        desktopBridge: undefined,
+      },
+    });
+
+    const transport = new WsTransport();
+    const socket = await waitForSocket();
+
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "http://100.64.0.10:3773/api/auth/ws-token",
+      expect.objectContaining({ method: "POST", credentials: "include" }),
+    );
+    expect(socket.url).toBe("ws://100.64.0.10:3773/ws?wsToken=paired-ws-token");
 
     transport.dispose();
   });

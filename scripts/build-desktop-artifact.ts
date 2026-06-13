@@ -20,6 +20,7 @@ import {
 } from "./lib/desktop-platform-build-config.ts";
 import { parseBooleanEnvValue } from "./lib/env-bool.ts";
 import { finalizeMacUpdateZip } from "./lib/mac-update-zip-finalize.ts";
+import { listMacUpdateManifestFileNames } from "./lib/mac-update-zip.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -495,7 +496,11 @@ function resolveDesktopRuntimeDependencies(
   return resolveCatalogDependencies(runtimeDependencies, catalog, "apps/desktop");
 }
 
-function resolveGitHubPublishConfig():
+const DEFAULT_DESKTOP_UPDATE_REPOSITORY = "Emanuele-web04/synara";
+
+function resolveGitHubPublishConfig(
+  rawRepo: string,
+):
   | {
       readonly provider: "github";
       readonly owner: string;
@@ -503,10 +508,6 @@ function resolveGitHubPublishConfig():
       readonly releaseType: "release";
     }
   | undefined {
-  const rawRepo =
-    process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
-    process.env.GITHUB_REPOSITORY?.trim() ||
-    "";
   if (!rawRepo) return undefined;
 
   const [owner, repo, ...rest] = rawRepo.split("/");
@@ -517,6 +518,32 @@ function resolveGitHubPublishConfig():
     owner,
     repo,
     releaseType: "release",
+  };
+}
+
+function resolveDesktopPublishConfig():
+  | {
+      readonly provider: "github";
+      readonly owner: string;
+      readonly repo: string;
+      readonly releaseType: "release";
+    }
+  | {
+      readonly provider: "generic";
+      readonly url: string;
+    } {
+  const rawRepo =
+    process.env.T3CODE_DESKTOP_UPDATE_REPOSITORY?.trim() ||
+    process.env.GITHUB_REPOSITORY?.trim() ||
+    DEFAULT_DESKTOP_UPDATE_REPOSITORY;
+  const githubPublishConfig = resolveGitHubPublishConfig(rawRepo);
+  if (githubPublishConfig) {
+    return githubPublishConfig;
+  }
+
+  return {
+    provider: "generic",
+    url: "https://example.invalid/synara-updates/",
   };
 }
 
@@ -556,16 +583,16 @@ const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       buildResources: "apps/desktop/resources",
     },
   };
-  const publishConfig = resolveGitHubPublishConfig();
-  if (publishConfig) {
-    buildConfig.publish = [publishConfig];
-  } else if (mockUpdates) {
+  if (mockUpdates) {
     buildConfig.publish = [
       {
         provider: "generic",
         url: `http://localhost:${mockUpdateServerPort ?? 3000}`,
       },
     ];
+  } else {
+    // electron-builder only emits latest-mac*.yml when publish is configured.
+    buildConfig.publish = [resolveDesktopPublishConfig()];
   }
 
   const windowsAzureSignOptions =
@@ -855,24 +882,32 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
   }
 
   if (options.platform === "mac") {
-    yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
-    const finalizedZip = yield* Effect.tryPromise({
-      try: () =>
-        finalizeMacUpdateZip({
-          stageDistDir,
-          signed: options.signed,
-          verbose: options.verbose,
-        }),
-      catch: (cause) =>
-        new BuildScriptError({
-          message: "macOS update zip finalization failed.",
-          cause,
-        }),
-    });
-    if (finalizedZip.removedZipBlockmapPath) {
+    const preFinalizeEntries = yield* fs.readDirectory(stageDistDir);
+    const manifestFileNames = listMacUpdateManifestFileNames(preFinalizeEntries);
+    if (manifestFileNames.length === 0) {
       yield* Effect.log(
-        `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
+        "[desktop-artifact] Skipping macOS update zip finalization (no update manifest produced).",
       );
+    } else {
+      yield* Effect.log("[desktop-artifact] Repacking and validating macOS update zip...");
+      const finalizedZip = yield* Effect.tryPromise({
+        try: () =>
+          finalizeMacUpdateZip({
+            stageDistDir,
+            signed: options.signed,
+            verbose: options.verbose,
+          }),
+        catch: (cause) =>
+          new BuildScriptError({
+            message: "macOS update zip finalization failed.",
+            cause,
+          }),
+      });
+      if (finalizedZip.removedZipBlockmapPath) {
+        yield* Effect.log(
+          `[desktop-artifact] Removed stale macOS zip blockmap (${path.basename(finalizedZip.removedZipBlockmapPath)}).`,
+        );
+      }
     }
   }
 

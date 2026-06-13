@@ -768,7 +768,10 @@ export const useSplitViewStore = create<SplitViewStore>()(
         hasHydrated: currentState.hasHydrated,
       }),
       onRehydrateStorage: () => {
-        return (state) => {
+        return (state, error) => {
+          if (error) {
+            console.warn("Failed to rehydrate split view state from localStorage.", error);
+          }
           state?.setHasHydrated(true);
         };
       },

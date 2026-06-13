@@ -28,6 +28,7 @@ import { Cause, Data, Effect, Exit, Layer, ManagedRuntime, Scope, Stream } from 
 import { RpcClient, RpcSerialization } from "effect/unstable/rpc";
 import * as Socket from "effect/unstable/socket/Socket";
 
+import { resolveWsHttpUrl } from "./lib/wsHttpUrl";
 import type { WsTransportState } from "./wsTransportEvents";
 
 type PushListener<C extends WsPushChannel> = (message: WsPushMessage<C>) => void;
@@ -89,6 +90,32 @@ function makeSocketUrl(explicitUrl: string | null): string {
   return appendPageAuthToken(resolveRpcUrl(rawUrl));
 }
 
+async function resolveAuthenticatedSocketUrl(explicitUrl: string | null): Promise<string> {
+  const socketUrl = new URL(makeSocketUrl(explicitUrl));
+  if (socketUrl.searchParams.has("token") || socketUrl.searchParams.has("wsToken")) {
+    return socketUrl.toString();
+  }
+
+  try {
+    const response = await fetch(resolveWsHttpUrl("/api/auth/ws-token"), {
+      method: "POST",
+      credentials: "include",
+    });
+    if (!response.ok) {
+      return socketUrl.toString();
+    }
+    const payload = (await response.json().catch(() => null)) as { token?: string } | null;
+    const wsToken = payload?.token?.trim();
+    if (wsToken) {
+      socketUrl.searchParams.set("wsToken", wsToken);
+    }
+  } catch {
+    // Loopback or pre-auth clients fall back to an unauthenticated upgrade attempt.
+  }
+
+  return socketUrl.toString();
+}
+
 function makeProtocolLayer(url: string) {
   const socketLayer = Socket.layerWebSocket(url).pipe(
     Layer.provide(Socket.layerWebSocketConstructorGlobal),
@@ -147,8 +174,8 @@ export class WsTransport {
   private sessionVersion = 0;
   private state: WsTransportState = "connecting";
   private disposed = false;
-  private runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never>;
-  private clientScope: Scope.Closeable;
+  private runtime: ManagedRuntime.ManagedRuntime<RpcClient.Protocol, never> | null = null;
+  private clientScope: Scope.Closeable | null = null;
   private clientPromise: Promise<RpcClientInstance>;
   private reconnectPromise: Promise<RpcClientInstance> | null = null;
   private reconnectFailures = 0;
@@ -159,10 +186,15 @@ export class WsTransport {
 
   constructor(url?: string) {
     this.explicitUrl = url ?? null;
-    const session = this.createSession();
+    this.clientPromise = this.bootstrapSession();
+  }
+
+  private async bootstrapSession(): Promise<RpcClientInstance> {
+    const socketUrl = await resolveAuthenticatedSocketUrl(this.explicitUrl);
+    const session = this.createSession(socketUrl);
     this.runtime = session.runtime;
     this.clientScope = session.clientScope;
-    this.clientPromise = session.clientPromise;
+    return session.clientPromise;
   }
 
   async request<T = unknown>(
@@ -212,7 +244,11 @@ export class WsTransport {
       >
     )[method];
     if (!call) throw new WsTransportRpcError({ message: `Unknown RPC method: ${method}` });
-    return (await this.runtime.runPromise(call(normalizedRpcInput))) as T;
+    const runtime = this.runtime;
+    if (!runtime) {
+      throw new WsTransportRpcError({ message: "Transport not connected" });
+    }
+    return (await runtime.runPromise(call(normalizedRpcInput))) as T;
   }
 
   subscribe<C extends WsPushChannel>(
@@ -272,14 +308,19 @@ export class WsTransport {
     this.setState("disposed");
     for (const cleanup of this.streamCleanups.values()) cleanup();
     this.streamCleanups.clear();
-    void this.runtime.runPromise(Scope.close(this.clientScope, Exit.void)).finally(() => {
-      this.runtime.dispose();
+    const runtime = this.runtime;
+    const clientScope = this.clientScope;
+    if (!runtime || !clientScope) {
+      return;
+    }
+    void runtime.runPromise(Scope.close(clientScope, Exit.void)).finally(() => {
+      runtime.dispose();
     });
   }
 
-  private createSession() {
+  private createSession(socketUrl: string) {
     const sessionVersion = ++this.sessionVersion;
-    const runtime = ManagedRuntime.make(makeProtocolLayer(makeSocketUrl(this.explicitUrl)));
+    const runtime = ManagedRuntime.make(makeProtocolLayer(socketUrl));
     const clientScope = runtime.runSync(Scope.make());
     const clientPromise = runtime
       .runPromise(Scope.provide(clientScope)(makeRpcClient))
@@ -318,9 +359,11 @@ export class WsTransport {
 
     this.setState("connecting");
 
-    void oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).finally(() => {
-      oldRuntime.dispose();
-    });
+    if (oldRuntime && oldClientScope) {
+      void oldRuntime.runPromise(Scope.close(oldClientScope, Exit.void)).finally(() => {
+        oldRuntime.dispose();
+      });
+    }
 
     this.reconnectPromise = this.openReconnectSession().finally(() => {
       this.reconnectPromise = null;
@@ -345,7 +388,8 @@ export class WsTransport {
     this.reconnectFailures += 1;
     await new Promise((resolve) => window.setTimeout(resolve, delayMs));
 
-    const session = this.createSession();
+    const socketUrl = await resolveAuthenticatedSocketUrl(this.explicitUrl);
+    const session = this.createSession(socketUrl);
     this.runtime = session.runtime;
     this.clientScope = session.clientScope;
     this.clientPromise = session.clientPromise;
@@ -535,8 +579,10 @@ export class WsTransport {
     restart?: (() => void) | undefined,
   ): void {
     if (this.streamCleanups.has(key)) return;
+    const runtime = this.runtime;
+    if (!runtime) return;
     const runnableStream = stream as Stream.Stream<T, WsTransportRpcError, never>;
-    const cancel = this.runtime.runCallback(
+    const cancel = runtime.runCallback(
       Stream.runForEach(runnableStream, (event) => Effect.sync(() => listener(event))),
       {
         onExit: (exit) => {
@@ -581,8 +627,12 @@ export class WsTransport {
     client: RpcClientInstance,
     params: unknown,
   ): Promise<GitRunStackedActionResult> {
+    const runtime = this.runtime;
+    if (!runtime) {
+      throw new Error("Transport not connected");
+    }
     let result: GitRunStackedActionResult | null = null;
-    await this.runtime.runPromise(
+    await runtime.runPromise(
       Stream.runForEach(client[WS_METHODS.gitRunStackedAction](params as never), (event) =>
         Effect.sync(() => {
           this.emit(WS_CHANNELS.gitActionProgress, event as GitActionProgressEvent);

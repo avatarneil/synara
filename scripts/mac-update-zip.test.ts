@@ -92,6 +92,15 @@ describe("mac-update-zip", () => {
       ["latest-mac.yml"],
     );
 
+    assert.deepStrictEqual(
+      resolveMacUpdateManifestFileNames([
+        "Synara-0.1.5-arm64.dmg",
+        "Synara-0.1.5-arm64.zip",
+        "latest-mac-arm64.yml",
+      ]),
+      ["latest-mac-arm64.yml"],
+    );
+
     assert.throws(
       () => resolveMacUpdateManifestFileNames(["Synara-0.1.5-arm64.dmg"]),
       /Expected at least one macOS update manifest/,

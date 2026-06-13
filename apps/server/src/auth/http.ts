@@ -83,9 +83,15 @@ export function makeEffectAuthRequest(request: HttpServerRequest.HttpServerReque
   for (const [key, value] of Object.entries(request.headers)) {
     headers[key.toLowerCase()] = Array.isArray(value) ? value.join(", ") : value;
   }
+  const headerCookies = parseCookies(headers.cookie);
+  const requestCookies = request.cookies ?? {};
+  const cookies =
+    Object.keys(requestCookies).length > 0
+      ? requestCookies
+      : headerCookies;
   return {
     headers,
-    cookies: request.cookies,
+    cookies,
     ...(url ? { url } : {}),
   };
 }
